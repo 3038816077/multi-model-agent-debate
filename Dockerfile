@@ -2,13 +2,15 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# 注意：这里的 URL 必须是没有方括号的纯文本
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_ENDPOINT=https://hf-mirror.com \
     HF_HUB_OFFLINE=0
 
-# 安装基础编译依赖（faiss-cpu 需要）
+# 👇 关键修改：替换系统源为国内源，解决 apt-get 极慢的问题
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
+
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
