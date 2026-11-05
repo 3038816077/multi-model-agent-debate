@@ -1,3 +1,4 @@
+
 # 🤖 多工具智能助手 Agent (Hybrid RAG + LangGraph)
 
 基于 **LangGraph + FastAPI + SQLite + FAISS** 从零搭建的企业级多工具智能体。项目包含完整的 ReAct 闭环、混合检索（Hybrid RAG）架构、并发状态隔离、多级记忆与会话持久化，支持 Docker 一键容器化部署。
@@ -11,6 +12,7 @@
 - 🏗️ **DDD 分层与工程化交付**：采用标准领域分层架构（`api` / `agent` / `core` / `db` / `tools`）。提供统一全局异常拦截，支持 Docker 多阶段构建与数据卷挂载一键部署。
 
 ## 🛠️ 技术栈
+
 - **核心框架**：FastAPI + Uvicorn + SQLAlchemy
 - **Agent 编排**：LangGraph (StateGraph) + ReAct 范式
 - **大语言模型**：通义千问 Qwen-Plus (OpenAI 兼容协议)
@@ -19,6 +21,7 @@
 - **部署运维**：Docker + Docker Compose
 
 ## 📁 项目结构
+
 ```text
 agent-demo/
 ├── app/
@@ -34,24 +37,36 @@ agent-demo/
 ├── requirements.txt
 └── run.py            # 启动入口
 ```
-###  🚀 快速启动
-## 方式一：本地运行
-安装依赖：pip install -r requirements.txt
 
-配置环境变量：将 env.txt 重命名为 .env，并填入你的 API Key。
-(注：首次启动会联网下载约 80MB 的向量化模型，下载完成后可在 .env 中设置 HF_HUB_OFFLINE=1 开启离线秒开模式)
+## 🚀 快速启动
 
-启动服务：python run.py
+### 方式一：本地运行
 
-访问页面：http://127.0.0.1:8000
+1. **安装依赖**：
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. **配置环境变量**：将 `env.txt` 重命名为 `.env`，并填入你的 API Key。
+   > *(注：首次启动会联网下载约 80MB 的向量化模型，下载完成后可在 `.env` 中设置 `HF_HUB_OFFLINE=1` 开启离线秒开模式)*
+3. **启动服务**：
+   ```bash
+   python run.py
+   ```
+4. **访问页面**：[http://127.0.0.1:8000](http://127.0.0.1:8000)
 
-## 方式二：Docker 一键部署
-bash
-# 确保本地已配置好 .env 文件
-docker compose up -d --build
-🎯 效果演示
-多步链式调用：输入 北京、上海、厦门天气，Agent 会自动并行调用 3 次天气工具并汇总回答。
+### 方式二：Docker 一键部署
 
-专有名词检索：在 knowledge 放入包含特定暗号的文档，提问时依靠 BM25 混合检索精准召回。
+1. 确保本地已配置好 `.env` 文件。
+2. 在项目根目录执行构建并后台启动：
+   ```bash
+   docker compose up -d --build
+   ```
+3. **工程化特性**：通过数据卷挂载（Volume）实现了 SQLite 会话历史、HuggingFace 向量模型缓存、知识库文件的持久化。容器销毁重启不丢失业务数据，开箱即用，彻底解决多环境部署的依赖一致性问题。
 
-思考过程可视化：前端可展开查看完整的“思考 - 调用 - 观察 - 回答”链路。
+## 🎯 效果演示
+
+1. **多步链式调用**：输入 `北京、上海、厦门天气`，Agent 会自动并行调用 3 次天气工具并汇总回答。
+2. **专有名词检索**：在 `knowledge` 放入包含特定暗号的文档，提问时依靠 BM25 混合检索精准召回。
+3. **思考过程可视化**：前端可展开查看完整的“思考 - 调用 - 观察 - 回答”链路。
+```
+
