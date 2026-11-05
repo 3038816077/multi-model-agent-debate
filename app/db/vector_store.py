@@ -3,13 +3,18 @@ import jieba
 import re
 from pypdf import PdfReader
 
-# 👇 1. 动态设置离线模式（必须在导入 HuggingFace 相关库之前设置）
+# 👇 1. 强制设置国内镜像站（必须放在所有 HuggingFace 相关导入的最前面）
+# 这样别人下载代码裸跑时，也会走国内镜像，极大降低超时概率
+if "HF_ENDPOINT" not in os.environ:
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+# 👇 2. 动态设置离线模式（必须在导入 HuggingFace 相关库之前设置）
 # 如果你在 .env 里配了 HF_HUB_OFFLINE=1，本地就会秒开；否则默认允许联网
 hf_offline = os.getenv("HF_HUB_OFFLINE", "0")
 os.environ["HF_HUB_OFFLINE"] = hf_offline
 os.environ["TRANSFORMERS_OFFLINE"] = hf_offline
 
-# 👇 2. 清理 jieba 的 DEBUG 日志
+# 👇 3. 清理 jieba 的 DEBUG 日志
 jieba.setLogLevel(jieba.logging.INFO)
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
