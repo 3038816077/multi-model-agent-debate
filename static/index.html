@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多工具智能助手 Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            background: #f0f2f5;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .chat-container {
+            width: 100%;
+            max-width: 760px;
+            height: 92vh;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .chat-header {
+            background: #2563eb;
+            color: #fff;
+            padding: 18px 24px;
+        }
+        .chat-header .title {
+            font-size: 17px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+        .chat-header .subtitle {
+            font-size: 13px;
+            opacity: 0.85;
+        }
+        .quick-btns {
+            padding: 12px 24px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .quick-btn {
+            padding: 6px 12px;
+            border: 1px solid #d1d5db;
+            background: #f9fafb;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #374151;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .quick-btn:hover {
+            background: #eff6ff;
+            border-color: #2563eb;
+            color: #2563eb;
+        }
+        .chat-messages {
+            flex: 1;
+            padding: 20px 24px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .message {
+            max-width: 72%;
+            padding: 10px 14px;
+            border-radius: 10px;
+            line-height: 1.6;
+            font-size: 15px;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+        .message.user {
+            align-self: flex-end;
+            background: #dbeafe;
+            color: #1e3a8a;
+            border-bottom-right-radius: 3px;
+        }
+        .message.ai {
+            align-self: flex-start;
+            background: #f3f4f6;
+            color: #1f2937;
+            border-bottom-left-radius: 3px;
+        }
+        .thinking {
+            align-self: flex-start;
+            background: #f3f4f6;
+            color: #6b7280;
+            font-size: 14px;
+            padding: 10px 14px;
+            border-radius: 10px;
+            border-bottom-left-radius: 3px;
+        }
+        .thinking-dots span {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #9ca3af;
+            margin-right: 3px;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+        .thought-toggle {
+            font-size: 12px;
+            color: #6b7280;
+            cursor: pointer;
+            margin-top: 8px;
+            text-decoration: underline;
+            user-select: none;
+        }
+        .thought-content {
+            margin-top: 8px;
+            padding: 10px;
+            background: #ffffff;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: "Consolas", monospace;
+            white-space: pre-wrap;
+            display: none;
+            border: 1px solid #e5e7eb;
+        }
+        .chat-input-area {
+            padding: 16px 24px;
+            border-top: 1px solid #f0f0f0;
+            display: flex;
+            gap: 10px;
+        }
+        #userInput {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        #userInput:focus {
+            border-color: #2563eb;
+        }
+        #sendBtn {
+            padding: 0 22px;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #sendBtn:hover {
+            background: #1d4ed8;
+        }
+        #sendBtn:disabled {
+            background: #93c5fd;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <div class="title">智能助手 · 多工具 Agent</div>
+            <div class="subtitle">基于 LangGraph + ReAct 范式 | 支持天气查询、数值计算、实时时间</div>
+        </div>
+
+        <div class="quick-btns">
+            <button class="quick-btn" onclick="quickSend('北京天气怎么样')">北京天气怎么样</button>
+            <button class="quick-btn" onclick="quickSend('计算 (12+28)*3')">计算 (12+28)*3</button>
+            <button class="quick-btn" onclick="quickSend('现在几点')">现在几点</button>
+            <button class="quick-btn" onclick="quickSend('今天星期几')">今天星期几</button>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="message ai">你好！我可以帮你查询天气、进行数值计算、获取当前时间，有什么可以帮你的吗？</div>
+        </div>
+
+        <div class="chat-input-area">
+            <input type="text" id="userInput" placeholder="输入你的问题，按回车发送..." autocomplete="off">
+            <button id="sendBtn">发送</button>
+        </div>
+    </div>
+
+    <script>
+        let sessionId = null;
+        const chatMessages = document.getElementById('chatMessages');
+        const userInput = document.getElementById('userInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function quickSend(text) {
+            userInput.value = text;
+            sendMessage();
+        }
+
+        function addMessage(content, role, thought = null) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}`;
+            msgDiv.textContent = content;
+
+            if (thought && role === 'ai') {
+                const toggle = document.createElement('div');
+                toggle.className = 'thought-toggle';
+                toggle.textContent = '查看思考过程';
+                toggle.onclick = () => {
+                    const isShow = thoughtDiv.style.display === 'block';
+                    thoughtDiv.style.display = isShow ? 'none' : 'block';
+                    toggle.textContent = isShow ? '查看思考过程' : '收起思考过程';
+                };
+
+                const thoughtDiv = document.createElement('div');
+                thoughtDiv.className = 'thought-content';
+                thoughtDiv.textContent = thought;
+
+                msgDiv.appendChild(toggle);
+                msgDiv.appendChild(thoughtDiv);
+            }
+
+            chatMessages.appendChild(msgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function addThinking() {
+            const div = document.createElement('div');
+            div.className = 'thinking';
+            div.id = 'thinkingTip';
+            div.innerHTML = '正在思考<span class="thinking-dots"><span></span><span></span><span></span></span>';
+            chatMessages.appendChild(div);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function removeThinking() {
+            const tip = document.getElementById('thinkingTip');
+            if (tip) tip.remove();
+        }
+
+        async function sendMessage() {
+            const text = userInput.value.trim();
+            if (!text) return;
+
+            addMessage(text, 'user');
+            userInput.value = '';
+            sendBtn.disabled = true;
+            addThinking();
+
+            try {
+                const res = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: text,
+                        session_id: sessionId
+                    })
+                });
+                const data = await res.json();
+                removeThinking();
+
+                if (data.code === 200) {
+                    sessionId = data.session_id;
+                    const thought = data.thought_process || null;
+                    addMessage(data.answer, 'ai', thought);
+                } else {
+                    addMessage('抱歉，服务出现异常，请稍后重试。', 'ai');
+                }
+            } catch (e) {
+                removeThinking();
+                addMessage('网络连接失败，请检查服务是否启动。', 'ai');
+            } finally {
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+        }
+
+        sendBtn.onclick = sendMessage;
+        userInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        userInput.focus();
+    </script>
+</body>
+</html>
