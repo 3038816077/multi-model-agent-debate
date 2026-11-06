@@ -1,12 +1,13 @@
 
 # 🤖 多工具智能助手 Agent (Hybrid RAG + LangGraph)
 
-基于 **LangGraph + FastAPI + SQLite + FAISS** 从零搭建的企业级多工具智能体。项目包含完整的 ReAct 闭环、混合检索（Hybrid RAG）架构、并发状态隔离、多级记忆与会话持久化，支持 Docker 一键容器化部署。
+基于 LangGraph + FastAPI + SQLite + FAISS 从零搭建的企业级多工具智能体。项目包含完整的 ReAct 闭环、混合检索（Hybrid RAG）架构、并发状态隔离、多级记忆与会话持久化，并深度集成了接口鉴权、限流防护与工具错误自愈机制。支持 Docker 多阶段构建与一键容器化交付。
 
 ## ✨ 核心工程亮点
 
 - 🧠 **意图前置路由与防死循环**：设计正则匹配的 Intent Router，对时间/计算等确定性场景进行后端兜底隔离；在 LLM 节点动态判断 `tool_choice`（首次 `required` 强控，二次 `auto` 恢复），彻底解决大模型“幻觉不调工具”与“工具无限死循环”的痛点。
 - 🔍 **混合检索架构 (Hybrid RAG)**：针对纯向量检索对专有名词、设备型号召回率极低的痛点，引入 **BM25（稀疏检索） + FAISS（稠密检索）**；基于 LangChain `EnsembleRetriever` 实现 **RRF（倒数排名融合）算法**，并接入 `jieba` 中文分词，支持 PDF/Markdown 多格式解析。
+- 🛡️ 安全防护与容错机制：新增 API Key 接口鉴权与基于 slowapi 的单 IP 限流（30次/分钟），防止恶意刷量；在 tool_node 中设计了工具异常自愈机制，当接口超时或参数错误时，将 Error 日志回流给大模型，引导其自主修正参数重试（最多2次），大幅提升复杂任务成功率。
 - 💾 **持久化与会话管理 (State Management)**：摒弃传统内存字典，引入 SQLAlchemy + SQLite 实现对话状态持久化。设计 Session 与 Message 双层表，结合后台长期记忆提取（Memory Extraction），实现服务重启及多进程环境下的跨会话状态无缝恢复。
 - ⚡ **并发安全与防踩踏优化**：废弃全局状态字典，基于 LangGraph State 的 `input_len` 增量截取 `final_messages`，实现并发请求下执行链路（思考过程）的无状态提取，彻底解决多用户并发导致的上下文污染与数据错乱。
 - 🏗️ **DDD 分层与工程化交付**：采用标准领域分层架构（`api` / `agent` / `core` / `db` / `tools`）。提供统一全局异常拦截，支持 Docker 多阶段构建与数据卷挂载一键部署。
@@ -17,6 +18,7 @@
 - **Agent 编排**：LangGraph (StateGraph) + ReAct 范式
 - **大语言模型**：通义千问 Qwen-Plus (OpenAI 兼容协议)
 - **检索增强 (RAG)**：FAISS + BM25 + Jieba + HuggingFace Embedding
+- **安全防护**：SlowAPI (限流) + 自定义 API Key 鉴权
 - **数据库**：SQLite (持久化) + 内存缓存 (天气/高频工具)
 - **部署运维**：Docker + Docker Compose
 
@@ -29,6 +31,7 @@ agent-demo/
 │   ├── agent/        # 核心层：LangGraph 状态机、LLM 节点、Tool 节点
 │   ├── core/         # 基础层：全局配置、日志、文本清洗
 │   ├── db/           # 数据层：SQLite 模型、CRUD、向量库 (FAISS+BM25)
+│   ├── middleware/ # 中间件层：API Key 鉴权与 IP 限流器
 │   └── tools/        # 工具层：天气、计算、时间、RAG 检索
 ├── knowledge/        # 本地知识库目录 (支持 .txt/.md/.pdf)
 ├── static/           # 前端交互页面
@@ -46,8 +49,8 @@ agent-demo/
    ```bash
    pip install -r requirements.txt
    ```
-2. **配置环境变量**：将 `env.txt` 重命名为 `.env`，并填入你的 API Key。
-   > *(注：首次启动会联网下载约 80MB 的向量化模型，下载完成后可在 `.env` 中设置 `HF_HUB_OFFLINE=1` 开启离线秒开模式)*
+2. **配置环境变量**：将 `env.txt` 重命名为 `.env`，填入你的大模型与天气 API Key
+   > *(注：如需测试接口鉴权，请在 .env 中配置 API_KEY="my-secret-key-123"；首次启动请保持 HF_HUB_OFFLINE=0 联网下载模型)*
 3. **启动服务**：
    ```bash
    python run.py
