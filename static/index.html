@@ -262,7 +262,11 @@
             try {
                 const res = await fetch('/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        // 👇 关键修改：加上了 X-API-Key！请确保这里的值和你 .env 里的 API_KEY 完全一致
+                        'X-API-Key': 'my-secret-key-123' 
+                    },
                     body: JSON.stringify({
                         message: text,
                         session_id: sessionId

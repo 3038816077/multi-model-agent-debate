@@ -1,5 +1,5 @@
 import copy, uuid, re
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -17,13 +17,16 @@ from app.agent.graph import agent_app
 from app.db.database import SessionLocal
 from app.db.crud import get_messages, save_message, get_or_create_session, update_long_term_memory
 
+# 👇 导入鉴权和限流组件
+from app.middleware.auth import limiter, verify_api_key
+
 router = APIRouter()
 
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
 
-# 👇 依赖注入，自动管理数据库连接的打开与关闭
+# 依赖注入，自动管理数据库连接的打开与关闭
 def get_db():
     db = SessionLocal()
     try:
@@ -36,8 +39,14 @@ system_prompt = r"""【身份】你是严格执行规则的智能助手，所有
 """
 
 @router.post("/chat", summary="对话接口")
-def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    session_id = request.session_id or str(uuid.uuid4())
+@limiter.limit("30/minute")  # 👈 限流装饰器
+def chat(
+    request: Request,              # 👈 限流必须接收 Request
+    request_body: ChatRequest,     # 👈 原来的 request 改名为 request_body
+    db: Session = Depends(get_db),
+    auth: bool = Depends(verify_api_key)  # 👈 鉴权注入
+):
+    session_id = request_body.session_id or str(uuid.uuid4())
     
     # 1. 从数据库加载历史消息（只取最近的 MAX_HISTORY_LENGTH 条）
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
@@ -55,13 +64,13 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     # 3. 意图判断与路由控制
     time_keywords = ["时间", "几点", "日期", "星期几", "今天几号", "现在什么时候"]
-    is_time_question = any(keyword in request.message for keyword in time_keywords)
+    is_time_question = any(keyword in request_body.message for keyword in time_keywords)
     
     calc_pattern = re.compile(r'计算|等于多少|算式|表达式|\d+\s*[+\-*/()]\s*\d+')
-    is_calc_question = bool(calc_pattern.search(request.message))
+    is_calc_question = bool(calc_pattern.search(request_body.message))
     
     weather_keywords = ["天气", "温度", "下雨", "下雪", "冷", "热", "度", "风", "雾", "霾"]
-    is_weather_question = any(kw in request.message for kw in weather_keywords) or "呢" in request.message
+    is_weather_question = any(kw in request_body.message for kw in weather_keywords) or "呢" in request_body.message
     
     # 注入天气缓存
     known_info = []
@@ -69,15 +78,15 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         for city_weather in WEATHER_CACHE[session_id].values():
             known_info.append("已知信息：" + city_weather)
     
-    user_content = request.message
+    user_content = request_body.message
     if known_info:
-        user_content = "内部参考数据：\n" + "\n".join(known_info) + "\n\n用户问题：" + request.message + "\n\n要求：1. 参考数据直接使用。2. 省略问法默认查天气，直接调用工具。3. 绝对禁止复述参考数据，禁止提已知信息，禁止问是否重新查询，直接输出简洁结果。"
+        user_content = "内部参考数据：\n" + "\n".join(known_info) + "\n\n用户问题：" + request_body.message + "\n\n要求：1. 参考数据直接使用。2. 省略问法默认查天气，直接调用工具。3. 绝对禁止复述参考数据，禁止提已知信息，禁止问是否重新查询，直接输出简洁结果。"
 
     logger.info("【最终用户输入】\n" + user_content + "\n")
     messages.append({"role": "user", "content": user_content})
     
-    # 👇 将用户原始提问存入数据库（注意存的是 request.message，而不是带参考数据的 user_content）
-    save_message(db, session_id, "user", request.message)
+    # 将用户原始提问存入数据库
+    save_message(db, session_id, "user", request_body.message)
 
     # ========== 时间拦截 ==========
     if is_time_question:
@@ -86,7 +95,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         resp = client.chat.completions.create(model=MODEL_NAME, messages=messages)
         final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
         
-        # 👇 存 AI 回复并更新长期记忆
         save_message(db, session_id, "assistant", final_answer)
         try:
             new_memory = extract_long_term_memory(messages, memory_text)
@@ -98,8 +106,8 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
 
     # ========== 计算拦截 ==========
     if is_calc_question and not is_time_question:
-        expr_match = re.search(r'[\d+\-*/().\s]+', request.message)
-        expression = expr_match.group().strip() if expr_match else request.message
+        expr_match = re.search(r'[\d+\-*/().\s]+', request_body.message)
+        expression = expr_match.group().strip() if expr_match else request_body.message
         calc_result = calculate_expression(expression)
         messages.append({"role": "system", "content": f"工具计算结果：{calc_result}。请仅基于这个数学结果用自然语言回答，附带计算过程，不要发散，不要涉及任何天气或无关信息。"})
         resp = client.chat.completions.create(model=MODEL_NAME, messages=messages)
@@ -107,7 +115,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         
         thought_process = f"【执行链路】\n\n第1步 调用工具：calculate_expression\n参数：{{\"expression\": \"{expression}\"}}\n\n第2步 返回结果：{calc_result}"
         
-        # 👇 存 AI 回复（带思考过程）并更新长期记忆
         save_message(db, session_id, "assistant", final_answer, thought_process)
         try:
             new_memory = extract_long_term_memory(messages, memory_text)
@@ -120,7 +127,14 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
     # ========== Agent 逻辑 ==========
     try:
         input_len = len(messages)
-        result = agent_app.invoke({"messages": messages, "session_id": session_id})
+        
+        # 👇 注意这里：加入了 retry_count: 0
+        result = agent_app.invoke({
+            "messages": messages, 
+            "session_id": session_id,
+            "retry_count": 0
+        })
+        
         final_messages = result["messages"]
         final_answer = clean_weather_reply(clean_latex_text(final_messages[-1].content))
         
@@ -162,7 +176,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)):
         elif is_weather_question and known_info:
             thought_process = "【执行链路】\n第1步 命中本地天气缓存\n第2步 直接读取缓存数据进行回答\n\n（注：相同城市在短时间内查询，系统会自动使用缓存以降低延迟和节省API调用额度）"
 
-        # 👇 存 AI 回复（带思考过程）并更新长期记忆
         save_message(db, session_id, "assistant", final_answer, thought_process)
         try:
             new_memory = extract_long_term_memory(final_messages, memory_text)
