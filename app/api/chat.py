@@ -7,7 +7,7 @@ from typing import Optional
 import app.tools.weather
 import app.tools.knowledge
 from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH
-from app.core.logger import logger
+from app.core.logger import logger, set_trace
 from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory
 from app.tools.calc import get_current_time, calculate_expression
 from app.tools.registry import WEATHER_CACHE
@@ -46,6 +46,7 @@ def chat(
     db: Session = Depends(get_db),
     auth: bool = Depends(verify_api_key)  # 👈 鉴权注入
 ):
+    current_trace_id = set_trace()
     session_id = request_body.session_id or str(uuid.uuid4())
     
     # 1. 从数据库加载历史消息（只取最近的 MAX_HISTORY_LENGTH 条）
@@ -102,7 +103,7 @@ def chat(
         except Exception as e:
             logger.warning(f"长期记忆更新失败：{str(e)}")
             
-        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages)}
+        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "trace_id": current_trace_id}
 
     # ========== 计算拦截 ==========
     if is_calc_question and not is_time_question:
@@ -122,7 +123,7 @@ def chat(
         except Exception as e:
             logger.warning(f"长期记忆更新失败：{str(e)}")
             
-        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process}
+        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process, "trace_id": current_trace_id}
         
     # ========== Agent 逻辑 ==========
     try:
@@ -183,7 +184,7 @@ def chat(
         except Exception as e:
             logger.warning(f"长期记忆更新失败：{str(e)}")
 
-        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process}
+        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process, "trace_id": current_trace_id}
     except Exception as e:
         logger.error(f"对话接口异常：{str(e)}", exc_info=True)
         return {"code": 500, "error": str(e)}

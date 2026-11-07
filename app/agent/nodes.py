@@ -1,7 +1,8 @@
 import json
 import concurrent.futures
 from app.core.config import client, MODEL_NAME
-from app.core.logger import logger
+# 👇 确保顶部有这三个导入
+from app.core.logger import logger, get_trace, set_trace 
 from app.tools.registry import TOOL_SCHEMAS, execute_tool
 from app.agent.state import State
 
@@ -36,7 +37,12 @@ def tool_node(state: State):
     tool_results = []
     has_error = False
     
+    # 👇 核心修复：在主线程中获取当前的 Trace ID
+    current_trace_id = get_trace()
+
     def run_single_tool(tool_call):
+        # 👇 核心修复：在子线程中强制注入主线程的 Trace ID，防止日志变成 [SYSTEM]
+        set_trace(current_trace_id)
         try:
             tool_args = json.loads(tool_call.function.arguments)
         except Exception:
@@ -65,7 +71,7 @@ def tool_node(state: State):
     
     new_messages = messages + tool_results
     
-    # 错误自愈逻辑控制（完全保留）
+    # 错误自愈逻辑控制
     if has_error:
         if retry_count < 2:
             logger.warning(f"工具报错，触发大模型自愈重试 (第 {retry_count + 1} 次)")

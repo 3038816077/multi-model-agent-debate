@@ -2,6 +2,7 @@ import os
 import jieba
 import re
 from pypdf import PdfReader
+from app.core.config import RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP, RAG_RECALL_TOP_K, RAG_FINAL_TOP_K
 
 # 👇 1. 动态读取离线配置
 hf_offline = os.getenv("HF_HUB_OFFLINE", "0")
@@ -34,7 +35,7 @@ from sentence_transformers import CrossEncoder
 from app.core.logger import logger
 
 ENSEMBLE_RETRIEVER = None
-RERANKER = None  # 新增全局变量
+RERANKER = None
 KNOWLEDGE_DIR = ""
 
 def load_file_content(filepath: str) -> str:
@@ -79,8 +80,11 @@ def init_knowledge_base(base_dir: str):
         logger.info("知识库目录为空，跳过向量库初始化")
         return
 
+    # 👇 配置化：文本切分参数
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=300, chunk_overlap=50, separators=["\n\n", "\n", "。", "；", " ", ""]
+        chunk_size=RAG_CHUNK_SIZE, 
+        chunk_overlap=RAG_CHUNK_OVERLAP, 
+        separators=["\n\n", "\n", "。", "；", " ", ""]
     )
     split_docs = splitter.create_documents(docs)
 
@@ -93,11 +97,13 @@ def init_knowledge_base(base_dir: str):
         model_kwargs={"device": "cpu", "local_files_only": is_offline}
     )
     vector_db = FAISS.from_documents(split_docs, embeddings)
-    faiss_retriever = vector_db.as_retriever(search_kwargs={"k": 10})
+    # 👇 配置化：粗排召回数量
+    faiss_retriever = vector_db.as_retriever(search_kwargs={"k": RAG_RECALL_TOP_K})
 
     # 2. BM25 关键词检索器
     bm25_retriever = BM25Retriever.from_documents(split_docs, preprocess_func=_chinese_tokenizer)
-    bm25_retriever.k = 10
+    # 👇 配置化：粗排召回数量
+    bm25_retriever.k = RAG_RECALL_TOP_K
 
     # 3. RRF 融合检索器
     ENSEMBLE_RETRIEVER = EnsembleRetriever(
@@ -105,7 +111,7 @@ def init_knowledge_base(base_dir: str):
         weights=[0.3, 0.7]
     )
 
-    # 4. 👇 初始化 Rerank 重排序模型
+    # 4. 初始化 Rerank 重排序模型
     logger.info(f"正在加载 Rerank 重排序模型 (首次运行会下载约1.1GB文件)...")
     try:
         RERANKER = CrossEncoder('BAAI/bge-reranker-base', max_length=512, local_files_only=is_offline)
@@ -115,12 +121,13 @@ def init_knowledge_base(base_dir: str):
 
     logger.info(f"知识库初始化完成，共 {len(split_docs)} 个文本块，【混合检索+精排】已启用")
 
-def hybrid_search(query: str, top_k: int = 3):
+# 👇 配置化：最终返回数量
+def hybrid_search(query: str, top_k: int = RAG_FINAL_TOP_K):
     """两阶段检索：粗排召回 + 精排重排序"""
     if not ENSEMBLE_RETRIEVER:
         return []
     try:
-        # 粗排：混合检索召回 Top 10
+        # 粗排：混合检索召回 Top N
         results = ENSEMBLE_RETRIEVER.invoke(query)
         
         seen = set()
@@ -130,7 +137,7 @@ def hybrid_search(query: str, top_k: int = 3):
                 seen.add(doc.page_content)
                 unique_docs.append(doc)
                 
-        # 👇 精排：用 Cross-Encoder 重新打分
+        # 精排：用 Cross-Encoder 重新打分
         if RERANKER and len(unique_docs) > 1:
             pairs = [[query, doc.page_content] for doc in unique_docs]
             scores = RERANKER.predict(pairs)
