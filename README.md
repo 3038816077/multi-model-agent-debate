@@ -40,6 +40,15 @@ agent-demo/
 ├── requirements.txt
 └── run.py            # 启动入口
 ```
+## ⚠️ 网络异常无法下载模型怎么办？（离线兜底方案）
+由于国内网络访问 HuggingFace 官方受限，如果你在首次启动时卡在 `正在加载向量模型`，请直接使用我们提供的离线模型包：
+1. 点击去 **[Releases](https://github.com/3038816077/multi-tool-agent-demo/releases/tag/v1.0.0)** 页面下载 `all-MiniLM-L6-v2.zip`。
+2. 将压缩包解压，把里面的 `hub` 文件夹放到你的电脑缓存目录：
+   - Windows: `C:\Users\你的用户名\.cache\huggingface\`
+   - Mac/Linux: `~/.cache/huggingface/`
+3. 打开 `.env` 文件，设置 `HF_HUB_OFFLINE=1`，重新启动服务即可实现秒级冷启动。
+
+
 
 ## 🚀 快速启动
 
