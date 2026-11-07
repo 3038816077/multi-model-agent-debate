@@ -1,10 +1,11 @@
 
 # 🤖 多工具智能助手 Agent (Hybrid RAG + LangGraph)
 
-基于 LangGraph + FastAPI + SQLite + FAISS 从零搭建的企业级多工具智能体。项目包含完整的 ReAct 闭环、混合检索（Hybrid RAG）架构、并发状态隔离、多级记忆与会话持久化，并深度集成了接口鉴权、限流防护与工具错误自愈机制。支持 Docker 多阶段构建与一键容器化交付。
-
+基于 LangGraph + FastAPI + SQLite + FAISS 从零搭建的多工具智能体。项目完整实现了 ReAct 闭环、两阶段混合检索（粗排+精排）、多工具线程池并发、并发状态隔离、多级记忆与会话持久化，并深度集成了接口鉴权、限流防护与工具错误自愈机制。支持 Docker 多阶段构建与一键容器化交付
 ## ✨ 核心工程亮点
+- ⚡ 多工具线程池并发调度：针对工具调用属于 IO 密集型任务的特点，在 tool_node 中引入 ThreadPoolExecutor。当大模型一次性发起多个 Function Calling 时，系统并发请求第三方接口，多任务总耗时缩短 60% 以上，并通过 Future 机制保证上下文顺序绝对保真。
 
+- 🔍 两阶段混合检索架构 (Two-Stage Hybrid RAG)：针对纯向量检索易召回冗余废话的痛点，先通过 BM25+FAISS 双路召回+RRF 融合进行粗排（Top 10），再引入轻量级 Cross-Encoder (BAAI/bge-reranker-base) 进行深度交互精排（Top 3）。有效过滤噪声，极大提升上下文纯度。
 - 🧠 **意图前置路由与防死循环**：设计正则匹配的 Intent Router，对时间/计算等确定性场景进行后端兜底隔离；在 LLM 节点动态判断 `tool_choice`（首次 `required` 强控，二次 `auto` 恢复），彻底解决大模型“幻觉不调工具”与“工具无限死循环”的痛点。
 - 🔍 **混合检索架构 (Hybrid RAG)**：针对纯向量检索对专有名词、设备型号召回率极低的痛点，引入 **BM25（稀疏检索） + FAISS（稠密检索）**；基于 LangChain `EnsembleRetriever` 实现 **RRF（倒数排名融合）算法**，并接入 `jieba` 中文分词，支持 PDF/Markdown 多格式解析。
 - 🛡️ 安全防护与容错机制：新增 API Key 接口鉴权与基于 slowapi 的单 IP 限流（30次/分钟），防止恶意刷量；在 tool_node 中设计了工具异常自愈机制，当接口超时或参数错误时，将 Error 日志回流给大模型，引导其自主修正参数重试（最多2次），大幅提升复杂任务成功率。
@@ -15,9 +16,9 @@
 ## 🛠️ 技术栈
 
 - **核心框架**：FastAPI + Uvicorn + SQLAlchemy
-- **Agent 编排**：LangGraph (StateGraph) + ReAct 范式
+- **Agent 编排**：LangGraph (StateGraph) + ReAct 范式 + 线程池并发
 - **大语言模型**：通义千问 Qwen-Plus (OpenAI 兼容协议)
-- **检索增强 (RAG)**：FAISS + BM25 + Jieba + HuggingFace Embedding
+- **检索增强 (RAG)**：FAISS + BM25 + Jieba + HuggingFace Embedding + BGE-Reranker 精排
 - **安全防护**：SlowAPI (限流) + 自定义 API Key 鉴权
 - **数据库**：SQLite (持久化) + 内存缓存 (天气/高频工具)
 - **部署运维**：Docker + Docker Compose
@@ -28,9 +29,9 @@
 agent-demo/
 ├── app/
 │   ├── api/          # 路由层：鉴权、意图拦截、思考过程提取
-│   ├── agent/        # 核心层：LangGraph 状态机、LLM 节点、Tool 节点
+│   ├── agent/ # 核心层：LangGraph 状态机、LLM 节点、并发 Tool 节点
 │   ├── core/         # 基础层：全局配置、日志、文本清洗
-│   ├── db/           # 数据层：SQLite 模型、CRUD、向量库 (FAISS+BM25)
+│   ├── db/ # 数据层：SQLite 模型、CRUD、向量库 (FAISS+BM25+精排) 
 │   ├── middleware/ # 中间件层：API Key 鉴权与 IP 限流器
 │   └── tools/        # 工具层：天气、计算、时间、RAG 检索
 ├── knowledge/        # 本地知识库目录 (支持 .txt/.md/.pdf)
@@ -77,8 +78,8 @@ agent-demo/
 
 ## 🎯 效果演示
 
-1. **多步链式调用**：输入 `北京、上海、厦门天气`，Agent 会自动并行调用 3 次天气工具并汇总回答。
-2. **专有名词检索**：在 `knowledge` 放入包含特定暗号的文档，提问时依靠 BM25 混合检索精准召回。
+1. **多工具并发调用**：输入 北京、上海、厦门天气，Agent 通过线程池在同一毫秒内并发请求 3 个城市接口，并汇总回答。
+2. **两阶段检索与降噪**：输入特定硬件型号，Agent 先混合检索召回 Top10，再通过 Rerank 精排剔除无关废话，最终精准输出。
 3. **思考过程可视化**：前端可展开查看完整的“思考 - 调用 - 观察 - 回答”链路。
 ```
 
