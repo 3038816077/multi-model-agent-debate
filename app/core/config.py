@@ -21,7 +21,7 @@ MODEL_NAME = "qwen-plus"
 RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", 300))        # 文本切分大小
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", 50))   # 文本切分重叠度
 RAG_RECALL_TOP_K = int(os.getenv("RAG_RECALL_TOP_K", 10))     # 粗排召回数量
-RAG_FINAL_TOP_K = int(os.getenv("RAG_FINAL_TOP_K", 3))        # 精排后最终返回数量
+RAG_FINAL_TOP_K = int(os.getenv("RAG_FINAL_TOP_K", 1))        # 精排后最终返回数量
 
 # ========== Agent 执行配置 ==========
 MAX_TOOL_RETRY = int(os.getenv("MAX_TOOL_RETRY", 2))          # 工具最大错误重试次数

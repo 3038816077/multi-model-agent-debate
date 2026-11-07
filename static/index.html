@@ -178,18 +178,21 @@
     <div class="chat-container">
         <div class="chat-header">
             <div class="title">智能助手 · 多工具 Agent</div>
-            <div class="subtitle">基于 LangGraph + ReAct 范式 | 支持天气查询、数值计算、实时时间</div>
+            <!-- 👇 修改了副标题，加入了知识库检索 -->
+            <div class="subtitle">基于 LangGraph + ReAct | 支持天气查询、数值计算、实时时间、知识库检索</div>
         </div>
 
         <div class="quick-btns">
             <button class="quick-btn" onclick="quickSend('北京天气怎么样')">北京天气怎么样</button>
             <button class="quick-btn" onclick="quickSend('计算 (12+28)*3')">计算 (12+28)*3</button>
             <button class="quick-btn" onclick="quickSend('现在几点')">现在几点</button>
-            <button class="quick-btn" onclick="quickSend('今天星期几')">今天星期几</button>
+            <!-- 👇 新增了一个测试 RAG 的快捷按钮 -->
+            <button class="quick-btn" onclick="quickSend('帮我查一下核心硬件的型号是什么？')">查设备型号</button>
         </div>
 
         <div class="chat-messages" id="chatMessages">
-            <div class="message ai">你好！我可以帮你查询天气、进行数值计算、获取当前时间，有什么可以帮你的吗？</div>
+            <!-- 👇 修改了欢迎语 -->
+            <div class="message ai">你好！我可以帮你查询天气、进行数值计算、获取当前时间，或者检索内部知识库文档。有什么可以帮你的吗？</div>
         </div>
 
         <div class="chat-input-area">
@@ -264,7 +267,7 @@
                     method: 'POST',
                     headers: { 
                         'Content-Type': 'application/json',
-                        // 👇 关键修改：加上了 X-API-Key！请确保这里的值和你 .env 里的 API_KEY 完全一致
+                        // 这里的 Key 必须和 .env 里的 API_KEY 完全一致
                         'X-API-Key': 'my-secret-key-123' 
                     },
                     body: JSON.stringify({
@@ -280,7 +283,7 @@
                     const thought = data.thought_process || null;
                     addMessage(data.answer, 'ai', thought);
                 } else {
-                    addMessage('抱歉，服务出现异常，请稍后重试。', 'ai');
+                    addMessage(`抱歉，服务出现异常：${data.msg || '未知错误'}`, 'ai');
                 }
             } catch (e) {
                 removeThinking();

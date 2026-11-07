@@ -73,9 +73,9 @@ def chat(
     weather_keywords = ["天气", "温度", "下雨", "下雪", "冷", "热", "度", "风", "雾", "霾"]
     is_weather_question = any(kw in request_body.message for kw in weather_keywords) or "呢" in request_body.message
     
-    # 注入天气缓存
+    # 👇 核心修复：注入天气缓存：只有当前问题确实在问天气时，才注入！彻底解决上下文污染
     known_info = []
-    if not is_time_question and not is_calc_question and session_id in WEATHER_CACHE:
+    if is_weather_question and not is_time_question and not is_calc_question and session_id in WEATHER_CACHE:
         for city_weather in WEATHER_CACHE[session_id].values():
             known_info.append("已知信息：" + city_weather)
     
@@ -129,7 +129,6 @@ def chat(
     try:
         input_len = len(messages)
         
-        # 👇 注意这里：加入了 retry_count: 0
         result = agent_app.invoke({
             "messages": messages, 
             "session_id": session_id,
