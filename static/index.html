@@ -8,6 +8,8 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; height: 100vh; display: flex; justify-content: center; align-items: center; }
         .app-container { width: 100%; max-width: 1100px; height: 92vh; display: flex; gap: 16px; position: relative; }
+        
+        /* 左侧侧边栏 */
         .sidebar { width: 260px; background: #ffffff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; overflow: hidden; }
         .sidebar-header { padding: 16px; border-bottom: 1px solid #f0f0f0; }
         .new-chat-btn { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
@@ -16,37 +18,62 @@
         .session-item { padding: 10px 12px; margin-bottom: 6px; border-radius: 8px; font-size: 13px; color: #374151; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.2s; }
         .session-item:hover { background: #f3f4f6; }
         .session-item.active { background: #eff6ff; color: #2563eb; font-weight: 500; }
+        
+        /* 右侧聊天区域 */
         .chat-container { flex: 1; background: #ffffff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; overflow: hidden; position: relative; }
         .chat-header { background: #2563eb; color: #fff; padding: 18px 24px; display: flex; justify-content: space-between; align-items: flex-start; }
         .chat-header .title { font-size: 17px; font-weight: 500; margin-bottom: 4px; }
         .chat-header .subtitle { font-size: 13px; opacity: 0.85; }
         .settings-btn { background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.5); padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; transition: background 0.2s; }
         .settings-btn:hover { background: rgba(255,255,255,0.3); }
+
         .quick-btns { padding: 12px 24px; border-bottom: 1px solid #f0f0f0; display: flex; gap: 8px; flex-wrap: wrap; }
         .quick-btn { padding: 6px 12px; border: 1px solid #d1d5db; background: #f9fafb; border-radius: 6px; font-size: 13px; color: #374151; cursor: pointer; transition: all 0.2s; }
         .quick-btn:hover { background: #eff6ff; border-color: #2563eb; color: #2563eb; }
+        
         .chat-messages { flex: 1; padding: 20px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
-        .message { max-width: 72%; padding: 10px 14px; border-radius: 10px; line-height: 1.6; font-size: 15px; white-space: pre-wrap; }
+        .message { max-width: 78%; padding: 10px 14px; border-radius: 10px; line-height: 1.6; font-size: 15px; word-wrap: break-word; white-space: pre-wrap; }
         .message.user { align-self: flex-end; background: #dbeafe; color: #1e3a8a; border-bottom-right-radius: 3px; }
         .message.ai { align-self: flex-start; background: #f3f4f6; color: #1f2937; border-bottom-left-radius: 3px; }
+        
         .thinking { align-self: flex-start; background: #f3f4f6; color: #6b7280; font-size: 14px; padding: 10px 14px; border-radius: 10px; }
         .thinking-dots span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #9ca3af; margin-right: 3px; animation: bounce 1.4s infinite ease-in-out both; }
         .thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
         .thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
         @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
+        
         .thought-toggle { font-size: 12px; color: #6b7280; cursor: pointer; margin-top: 8px; text-decoration: underline; display: none; user-select: none;}
         .thought-content { margin-top: 8px; padding: 10px; background: #ffffff; border-radius: 6px; font-size: 12px; font-family: Consolas, monospace; white-space: pre-wrap; display: none; border: 1px solid #e5e7eb; max-height: 250px; overflow-y: auto;}
-        .chat-input-area { padding: 16px 24px; border-top: 1px solid #f0f0f0; display: flex; gap: 10px; }
-        #userInput { flex: 1; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; outline: none; }
-        #sendBtn { padding: 0 22px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; }
-        #sendBtn:disabled { background: #93c5fd; cursor: not-allowed; }
+        
+        /* 输入区及上方开关 */
+        .input-wrapper { padding: 12px 24px 16px 24px; border-top: 1px solid #f0f0f0; }
+        .input-toolbar { display: flex; align-items: center; margin-bottom: 8px; gap: 12px; }
+        
+        .web-search-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #4b5563; cursor: pointer; user-select: none; }
+        .web-search-switch input[type="checkbox"] { width: 16px; height: 16px; accent-color: #2563eb; cursor: pointer; }
+        .web-search-switch.active { color: #2563eb; font-weight: 500; }
+
+        .chat-input-area { display: flex; gap: 10px; align-items: flex-end; }
+        #userInput { flex: 1; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; outline: none; min-height: 42px; max-height: 120px; }
+        
+        #sendBtn {
+            width: 42px; height: 42px; min-width: 42px; background: #2563eb; color: #fff;
+            border: none; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.2s;
+        }
+        #sendBtn:hover { background: #1d4ed8; }
+        #sendBtn svg { width: 20px; height: 20px; }
+        #sendBtn.stop-state { background: #4b5563; } 
+        #sendBtn.stop-state:hover { background: #374151; }
+
+        /* 设置弹窗蒙层 */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; }
         .modal-content { background: #fff; padding: 24px; border-radius: 12px; width: 420px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
         .modal-content h3 { margin-bottom: 16px; font-size: 18px; color: #1f2937; }
-        .modal-content label { font-size: 13px; color: #4b5563; font-weight: 500; }
-        .modal-content input { width: 100%; padding: 10px; margin-top: 6px; margin-bottom: 16px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; outline: none; }
-        .modal-content input:focus { border-color: #2563eb; }
-        .modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+        .modal-content label { font-size: 13px; color: #4b5563; font-weight: 500; display: block; margin-top: 12px; }
+        .modal-content input, .modal-content select { width: 100%; padding: 10px; margin-top: 6px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; outline: none; background: #fff; }
+        .modal-content input:focus, .modal-content select:focus { border-color: #2563eb; }
+        .modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
         .modal-btns button { padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; border: none; }
         .btn-cancel { background: #f3f4f6; color: #374151; }
         .btn-save { background: #2563eb; color: #fff; }
@@ -60,6 +87,7 @@
             </div>
             <div class="session-list" id="sessionList"></div>
         </div>
+
         <div class="chat-container">
             <div class="chat-header">
                 <div>
@@ -73,19 +101,44 @@
                 <button class="quick-btn" onclick="quickSend('计算 (12+28)*3')">计算 (12+28)*3</button>
                 <button class="quick-btn" onclick="quickSend('现在几点')">现在几点</button>
                 <button class="quick-btn" onclick="quickSend('帮我查一下核心硬件的型号是什么？')">查设备型号</button>
+                <button class="quick-btn" onclick="quickSend('最近有什么 AI 新闻？')">最近AI新闻</button>
             </div>
             <div class="chat-messages" id="chatMessages"></div>
-            <div class="chat-input-area">
-                <input type="text" id="userInput" placeholder="输入你的问题，按回车发送..." autocomplete="off">
-                <button id="sendBtn">发送</button>
+            
+            <div class="input-wrapper">
+                <div class="input-toolbar">
+                    <label class="web-search-switch" id="webSearchLabel">
+                        <input type="checkbox" id="webSearchToggle" onchange="toggleWebSearch()">
+                        🌐 联网搜索
+                    </label>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" id="userInput" placeholder="输入你的问题，按回车发送..." autocomplete="off">
+                    <button id="sendBtn" onclick="handleSendClick()">
+                        <svg id="sendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                        <svg id="stopIcon" style="display:none;" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                    </button>
+                </div>
             </div>
         </div>
     </div>
+
     <div class="modal-overlay" id="settingsModal">
         <div class="modal-content">
             <h3>自定义模型配置</h3>
-            <label>自定义接口地址 (可选)</label>
-            <input type="text" id="userBaseUrl" placeholder="例如：https://api.deepseek.com/v1">
+            <label>选择模型厂商 (自动填入地址)</label>
+            <select id="llmProvider" onchange="changeProvider()">
+                <option value="">-- 请选择 --</option>
+                <option value="qwen">通义千问</option>
+                <option value="glm">智谱 GLM (免费)</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="kimi">月之暗面 Kimi</option>
+                <option value="doubao">字节豆包</option>
+            </select>
+            <label>接口地址</label>
+            <input type="text" id="userBaseUrl" placeholder="https://...">
+            <label>模型名称</label>
+            <input type="text" id="userModelName" placeholder="例如：qwen-plus, deepseek-chat">
             <label>API Key (仅保存在您本地浏览器)</label>
             <input type="password" id="userApiKey" placeholder="sk-...">
             <div class="modal-btns">
@@ -94,41 +147,116 @@
             </div>
         </div>
     </div>
+
     <script>
         let sessionId = localStorage.getItem('agent_session_id') || null;
         const chatMessages = document.getElementById('chatMessages');
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
+        const sendIcon = document.getElementById('sendIcon');
+        const stopIcon = document.getElementById('stopIcon');
         const sessionList = document.getElementById('sessionList');
         const API_KEY = 'my-secret-key-123';
 
-        function openSettings() {
-            document.getElementById('userApiKey').value = localStorage.getItem('user_api_key') || '';
-            document.getElementById('userBaseUrl').value = localStorage.getItem('user_base_url') || '';
-            document.getElementById('settingsModal').style.display = 'flex';
-        }
-        function closeSettings() {
-            document.getElementById('settingsModal').style.display = 'none';
-        }
-        function saveSettings() {
-            const key = document.getElementById('userApiKey').value.trim();
-            const url = document.getElementById('userBaseUrl').value.trim();
-            localStorage.setItem('user_api_key', key);
-            localStorage.setItem('user_base_url', url);
-            closeSettings();
-            alert('配置已保存在本地！');
+        let isGenerating = false;
+        let currentAbortController = null;
+        
+        // 👇 智能追速打字机：全局定时器
+        let typingInterval = null;
+        let thinkingQueue = "";
+        let contentQueue = "";
+
+        function startTypingMachine(thoughtDiv, textSpan) {
+            if (typingInterval) clearInterval(typingInterval);
+            typingInterval = setInterval(() => {
+                // 优先渲染思考过程
+                if (thinkingQueue.length > 0) {
+                    // 智能追速：如果队列积压超过 50，一次打 5 个；否则一次打 1 个
+                    let step = thinkingQueue.length > 50 ? 5 : 1;
+                    thoughtDiv.textContent += thinkingQueue.slice(0, step);
+                    thinkingQueue = thinkingQueue.slice(step);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                } 
+                // 思考过程渲染完，渲染最终回答
+                else if (contentQueue.length > 0) {
+                    let step = contentQueue.length > 50 ? 5 : 1;
+                    textSpan.textContent += contentQueue.slice(0, step);
+                    contentQueue = contentQueue.slice(step);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }
+            }, 15);
         }
 
-        async function init() {
-            await loadSessionList();
-            if (sessionId) {
-                await loadHistory(sessionId);
+        function handleSendClick() {
+            if (isGenerating) {
+                if (currentAbortController) currentAbortController.abort();
             } else {
-                createNewChat();
+                sendMessage();
             }
         }
 
+        function updateButtonState(generating) {
+            isGenerating = generating;
+            if (generating) {
+                sendBtn.classList.add('stop-state');
+                sendIcon.style.display = 'none';
+                stopIcon.style.display = 'block';
+            } else {
+                sendBtn.classList.remove('stop-state');
+                sendIcon.style.display = 'block';
+                stopIcon.style.display = 'none';
+            }
+        }
+
+        // ========== 联网开关逻辑 ==========
+        const webSearchToggle = document.getElementById('webSearchToggle');
+        const webSearchLabel = document.getElementById('webSearchLabel');
+        if (localStorage.getItem('enable_web_search') === 'true') {
+            webSearchToggle.checked = true;
+            webSearchLabel.classList.add('active');
+        }
+        function toggleWebSearch() {
+            const isChecked = webSearchToggle.checked;
+            localStorage.setItem('enable_web_search', isChecked);
+            if (isChecked) webSearchLabel.classList.add('active');
+            else webSearchLabel.classList.remove('active');
+        }
+
+        // ========== 设置弹窗逻辑 ==========
+        function openSettings() {
+            document.getElementById('userApiKey').value = localStorage.getItem('user_api_key') || '';
+            document.getElementById('userBaseUrl').value = localStorage.getItem('user_base_url') || '';
+            document.getElementById('userModelName').value = localStorage.getItem('user_model_name') || '';
+            document.getElementById('settingsModal').style.display = 'flex';
+        }
+        function closeSettings() { document.getElementById('settingsModal').style.display = 'none'; }
+        function saveSettings() {
+            localStorage.setItem('user_api_key', document.getElementById('userApiKey').value.trim());
+            localStorage.setItem('user_base_url', document.getElementById('userBaseUrl').value.trim());
+            localStorage.setItem('user_model_name', document.getElementById('userModelName').value.trim());
+            closeSettings();
+            alert('配置已保存在本地！');
+        }
+        function changeProvider() {
+            const provider = document.getElementById('llmProvider').value;
+            const urlInput = document.getElementById('userBaseUrl');
+            const modelInput = document.getElementById('userModelName');
+            if (provider === 'qwen') { urlInput.value = 'https://dashscope.aliyuncs.com/compatible-mode/v1'; modelInput.value = 'qwen-plus'; }
+            else if (provider === 'glm') { urlInput.value = 'https://open.bigmodel.cn/api/paas/v4/'; modelInput.value = 'glm-4-flash'; }
+            else if (provider === 'deepseek') { urlInput.value = 'https://api.deepseek.com/v1'; modelInput.value = 'deepseek-chat'; }
+            else if (provider === 'kimi') { urlInput.value = 'https://api.moonshot.cn/v1'; modelInput.value = 'moonshot-v1-8k'; }
+            else if (provider === 'doubao') { urlInput.value = 'https://ark.cn-beijing.volces.com/api/v3'; modelInput.value = 'doubao-pro-32k'; }
+        }
+
+        // ========== 页面初始化 ==========
+        async function init() {
+            await loadSessionList();
+            if (sessionId) await loadHistory(sessionId);
+            else createNewChat();
+        }
+
         function createNewChat() {
+            if (isGenerating) return;
             sessionId = null;
             localStorage.removeItem('agent_session_id');
             chatMessages.innerHTML = '<div class="message ai">你好！我已经准备好了。你可以问我天气、算数、时间，或者查阅内部知识库。</div>';
@@ -154,6 +282,7 @@
         }
 
         async function switchSession(id) {
+            if (isGenerating) return;
             sessionId = id;
             localStorage.setItem('agent_session_id', id);
             await loadHistory(id);
@@ -166,38 +295,29 @@
                 const res = await fetch(`/sessions/${id}/messages`, { headers: { 'X-API-Key': API_KEY } });
                 const data = await res.json();
                 chatMessages.innerHTML = '';
-                
                 if (data.code === 200 && data.data.length > 0) {
-                    data.data.forEach(m => {
-                        addMessage(m.content, m.role, m.thought_process);
-                    });
+                    data.data.forEach(m => addMessage(m.content, m.role, m.thought_process));
                 } else {
                     chatMessages.innerHTML = '<div class="message ai">历史记录为空。</div>';
                 }
-            } catch (e) {
-                chatMessages.innerHTML = '<div class="message ai">加载历史记录失败。</div>';
-            }
+            } catch (e) { chatMessages.innerHTML = '<div class="message ai">加载历史记录失败。</div>'; }
         }
 
         function addMessage(content, role, thought = null) {
             const msgDiv = document.createElement('div');
             const displayRole = (role === 'assistant') ? 'ai' : role;
             msgDiv.className = `message ${displayRole}`;
-            
             const textSpan = document.createElement('span');
             textSpan.textContent = content;
             msgDiv.appendChild(textSpan);
-
             if (thought && displayRole === 'ai') {
                 const toggle = document.createElement('div');
                 toggle.className = 'thought-toggle';
                 toggle.style.display = 'block';
                 toggle.textContent = '查看思考过程';
-                
                 const thoughtDiv = document.createElement('div');
                 thoughtDiv.className = 'thought-content';
                 thoughtDiv.textContent = thought;
-                
                 toggle.onclick = () => {
                     const isShow = thoughtDiv.style.display === 'block';
                     thoughtDiv.style.display = isShow ? 'none' : 'block';
@@ -213,17 +333,23 @@
 
         async function sendMessage() {
             const text = userInput.value.trim();
-            if (!text) return;
+            if (!text || isGenerating) return;
 
             addMessage(text, 'user');
             userInput.value = '';
-            sendBtn.disabled = true;
+            updateButtonState(true); 
             
             const thinkingDiv = document.createElement('div');
             thinkingDiv.className = 'thinking';
             thinkingDiv.innerHTML = '正在思考<span class="thinking-dots"><span></span><span></span><span></span></span>';
             chatMessages.appendChild(thinkingDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            currentAbortController = new AbortController();
+            
+            // 清空打字机队列
+            thinkingQueue = "";
+            contentQueue = "";
 
             try {
                 const response = await fetch('/chat/stream', {
@@ -233,22 +359,28 @@
                         message: text, 
                         session_id: sessionId,
                         user_api_key: localStorage.getItem('user_api_key') || null,
-                        user_base_url: localStorage.getItem('user_base_url') || null
-                    })
+                        user_base_url: localStorage.getItem('user_base_url') || null,
+                        user_model_name: localStorage.getItem('user_model_name') || null,
+                        enable_web_search: webSearchToggle.checked
+                    }),
+                    signal: currentAbortController.signal
                 });
 
                 thinkingDiv.remove(); 
                 const aiBubble = document.createElement('div');
                 aiBubble.className = 'message ai';
+                
                 const textSpan = document.createElement('span');
                 aiBubble.appendChild(textSpan);
                 
                 const toggle = document.createElement('div');
                 toggle.className = 'thought-toggle';
                 toggle.textContent = '正在思考...';
+                toggle.style.display = 'block';
                 
                 const thoughtDiv = document.createElement('div');
                 thoughtDiv.className = 'thought-content';
+                thoughtDiv.style.display = 'block'; // 默认展开
                 
                 toggle.onclick = () => {
                     const isShow = thoughtDiv.style.display === 'block';
@@ -260,29 +392,12 @@
                 chatMessages.appendChild(aiBubble);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
 
+                // 启动打字机
+                startTypingMachine(thoughtDiv, textSpan);
+
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder("utf-8");
                 let buffer = "";
-                
-                let thinkingQueue = "";
-                let answerQueue = "";
-                let isTypingThinking = true;
-                
-                const typingInterval = setInterval(() => {
-                    if (isTypingThinking) {
-                        if (thinkingQueue.length > 0) {
-                            thoughtDiv.textContent += thinkingQueue.charAt(0);
-                            thinkingQueue = thinkingQueue.slice(1);
-                            chatMessages.scrollTop = chatMessages.scrollHeight;
-                        }
-                    } else {
-                        if (answerQueue.length > 0) {
-                            textSpan.textContent += answerQueue.charAt(0);
-                            answerQueue = answerQueue.slice(1);
-                            chatMessages.scrollTop = chatMessages.scrollHeight;
-                        }
-                    }
-                }, 15);
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -296,27 +411,17 @@
                             const payload = JSON.parse(line.replace("data: ", ""));
                             
                             if (payload.event === 'thinking_start') {
-                                toggle.style.display = 'block';
-                                thoughtDiv.style.display = 'block';
                                 thoughtDiv.textContent = "";
-                                isTypingThinking = true;
+                                thinkingQueue = "";
                             } else if (payload.event === 'thinking') {
-                                thinkingQueue += payload.data;
+                                thinkingQueue += payload.data; // 只入队，定时器负责打
                             } else if (payload.event === 'thinking_done') {
-                                const checkQueue = setInterval(() => {
-                                    if (thinkingQueue.length === 0) {
-                                        clearInterval(checkQueue);
-                                        toggle.textContent = '收起思考过程';
-                                        isTypingThinking = false; // 切换到回答模式
-                                    }
-                                }, 50);
+                                toggle.textContent = '查看思考过程';
                             } else if (payload.event === 'content') {
-                                // 如果因为某些原因没收到 thinking_done，这里做个兜底强制切换
-                                if (isTypingThinking && thinkingQueue.length === 0) {
-                                    isTypingThinking = false;
-                                    if (thoughtDiv.textContent === "") toggle.style.display = 'none';
+                                if (toggle.textContent === '正在思考...') {
+                                    toggle.textContent = '查看思考过程';
                                 }
-                                answerQueue += payload.data;
+                                contentQueue += payload.data; // 只入队
                             } else if (payload.event === 'done') {
                                 sessionId = payload.session_id;
                                 localStorage.setItem('agent_session_id', sessionId);
@@ -327,26 +432,29 @@
                         }
                     }
                 }
-                
-                const waitRender = setInterval(() => {
-                    if (thinkingQueue.length === 0 && answerQueue.length === 0) {
-                        clearInterval(waitRender);
-                        clearInterval(typingInterval);
-                    }
-                }, 100);
-
             } catch (e) {
                 thinkingDiv.remove();
-                addMessage('网络连接失败，请检查服务是否启动。', 'ai');
+                if (e.name === 'AbortError') {
+                    console.log('用户已手动停止生成');
+                } else {
+                    addMessage('网络连接失败，请检查服务是否启动。', 'ai');
+                }
             } finally {
-                sendBtn.disabled = false;
+                updateButtonState(false); 
+                currentAbortController = null;
                 userInput.focus();
+                // 注意：这里不立即 clearInterval，让它自然把队列里剩下的字打完
             }
         }
 
         function quickSend(text) { userInput.value = text; sendMessage(); }
         sendBtn.onclick = sendMessage;
-        userInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
+        userInput.addEventListener('keydown', e => { 
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault(); 
+                handleSendClick(); 
+            }
+        });
         
         init();
     </script>

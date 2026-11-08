@@ -7,24 +7,20 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
 
+from app.core.config import MAX_HISTORY_LENGTH
 import app.tools.weather
 import app.tools.knowledge
-from app.core.config import MODEL_NAME, MAX_HISTORY_LENGTH
+import app.tools.web_search # 确保注册了联网工具
+from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name
 from app.core.logger import logger, set_trace
 from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory
 from app.tools.calc import get_current_time, calculate_expression
 from app.tools.registry import WEATHER_CACHE
 from app.agent.graph import agent_app
 
-# 👇 导入数据库模块
 from app.db.database import SessionLocal
 from app.db.crud import get_messages, save_message, get_or_create_session, update_long_term_memory
-
-# 👇 导入鉴权和限流组件
 from app.middleware.auth import limiter, verify_api_key
-
-# 👇 导入 LLM 动态工厂
-from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key
 
 router = APIRouter()
 
@@ -33,6 +29,8 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     user_api_key: Optional[str] = None
     user_base_url: Optional[str] = None
+    user_model_name: Optional[str] = None
+    enable_web_search: Optional[bool] = False # 是否开启强制联网
 
 def get_db():
     db = SessionLocal()
@@ -41,8 +39,35 @@ def get_db():
     finally:
         db.close()
 
+# 👇 这里是之前丢失的完整 system_prompt，已经修复了 Markdown 冲突
 system_prompt = r"""【身份】你是严格执行规则的智能助手，所有计算、查询必须调用工具，禁止编造答案。
-... (保持你原来的 prompt 不变) ...
+【最高优先级规则】
+0. 如果用户询问的是“你自己”具备什么功能、能做什么，请直接用自然语言回答（如查天气、算术、查时间）。如果用户询问的是“特定产品”的使用说明、操作规则、外部文档等知识，必须调用 search_knowledge 检索。
+1. 你的所有输出必须使用标准 Markdown 格式（如加粗、列表、表格、代码块），但绝对禁止使用 LaTeX 数学公式（如 \times、\frac 等）。
+2. 天气查询、数值计算类问题，必须立刻调用对应工具获取结果，绝对禁止在未调用工具的情况下自行编造或输出任何半截结果。
+3. 对话中注入的参考数据仅作内部使用，回答时禁止复述、禁止提及，禁止询问用户是否需要重新查询，直接输出核心结果即可。
+4. 支持多工具并行调用，同类型多任务必须一次性批量执行，禁止逐轮单工具调用。
+
+【强制规则】
+1. 开头的「已知信息」里已有的数据，直接使用，禁止重复调用工具、禁止反问用户。
+2. 缺少必要信息时才调用工具；多个任务必须一次性调用全部工具。
+3. 数值计算必须调用 calculate_expression 工具，禁止心算直接给结果。
+4. 工具出错先修正参数重试1次，仍失败再如实告知原因。
+5. 计算类问题返回结果时，必须用自然语言给出明确结论，再附带计算过程。禁止只输出算式、禁止只说“计算结果正确”。
+6. 最终回答必须贴合用户的问题场景，直接给出用户想要的答案，不要站在工具校验的角度回复。
+7. 不向用户展示工具调用过程。
+8. 调用知识库工具后，只能基于检索到的内容回答，禁止编造知识库外的信息；知识库没有相关内容时，如实告知用户「暂未查询到相关信息」，禁止胡编；回答时不要提及「知识库」「检索」等内部逻辑。
+9. 对话中提供的上下文参考内容，仅作为内部数据使用，回答时直接引用结论，不要提及「上下文」「已知信息」等表述，也不要复述前置内容。
+10. 当你获取到天气工具的结果后，请直接以自然语言输出，可以包含「XX天气：」的格式，但不要在没拿到数据时强行输出该前缀。
+11. 当用户询问“你有什么功能”、“你能做什么”等自身能力问题时，请直接列出你的技能列表（查天气、计算、时间、知识库检索、联网搜索）。绝对禁止引用历史对话中的具体查询结果作为举例。
+12. 当你调用了 search_knowledge 工具后，必须基于检索结果回答，并且在回答中明确标注信息来源。格式要求：根据【来源文件: xxx.txt】的内容，……。绝对禁止编造来源信息。
+
+【可用工具】
+- calculate_expression：通用数学计算，传入表达式字符串
+- get_current_time：获取当前时间，无需参数
+- get_weather：查询城市天气，传入城市名称
+- search_knowledge：从本地知识库检索信息
+- search_web：联网搜索最新资讯
 """
 
 # ==================== 1. 同步对话接口 ====================
@@ -52,7 +77,7 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
     current_trace_id = set_trace()
     if request_body.user_api_key:
         logger.info(f"[自定义Key] 使用用户 Key: {mask_api_key(request_body.user_api_key)}")
-        set_llm_client(request_body.user_api_key, request_body.user_base_url)
+        set_llm_client(request_body.user_api_key, request_body.user_base_url, request_body.user_model_name)
 
     session_id = request_body.session_id or str(uuid.uuid4())
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
@@ -80,6 +105,10 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
     user_content = request_body.message
     if known_info:
         user_content = "内部参考数据：\n" + "\n".join(known_info) + "\n\n用户问题：" + request_body.message + "\n\n要求：1. 参考数据直接使用。2. 省略问法默认查天气，直接调用工具。3. 绝对禁止复述参考数据，禁止提已知信息，禁止问是否重新查询，直接输出简洁结果。"
+    
+    if request_body.enable_web_search:
+        logger.info("[强制联网] 用户开启了联网搜索开关")
+        user_content = f"【系统强制指令】用户已开启联网搜索，请务必优先调用 search_web 工具查询最新资讯。\n{user_content}"
 
     logger.info("【最终用户输入】\n" + user_content + "\n")
     messages.append({"role": "user", "content": user_content})
@@ -87,9 +116,7 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
 
     if is_time_question:
         real_time = get_current_time()
-        messages.append({"role": "system", "content": f"实时时间结果：{real_time}。请基于这个结果用自然口语回答用户。"})
-        resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
-        final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
+        final_answer = f"当前时间是：{real_time}。"
         save_message(db, session_id, "assistant", final_answer)
         return {"code": 200, "answer": final_answer, "session_id": session_id, "trace_id": current_trace_id}
 
@@ -97,9 +124,7 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         expr_match = re.search(r'[\d+\-*/().\s]+', request_body.message)
         expression = expr_match.group().strip() if expr_match else request_body.message
         calc_result = calculate_expression(expression)
-        messages.append({"role": "system", "content": f"工具计算结果：{calc_result}。请仅基于这个数学结果用自然语言回答，附带计算过程。"})
-        resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
-        final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
+        final_answer = f"{calc_result}。"
         thought_process = f"【执行链路】\n\n第1步 调用工具：calculate_expression\n参数：{{\"expression\": \"{expression}\"}}\n\n第2步 返回结果：{calc_result}"
         save_message(db, session_id, "assistant", final_answer, thought_process)
         return {"code": 200, "answer": final_answer, "session_id": session_id, "thought_process": thought_process, "trace_id": current_trace_id}
@@ -109,7 +134,6 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         result = agent_app.invoke({"messages": messages, "session_id": session_id, "retry_count": 0})
         final_messages = result["messages"]
         final_answer = clean_weather_reply(clean_latex_text(final_messages[-1].content))
-        
         for msg in final_messages:
             role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
             name = msg.get("name") if isinstance(msg, dict) else getattr(msg, "name", "")
@@ -123,7 +147,6 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         step_list = []
         step_index = 1
         new_messages = final_messages[input_len:]
-        
         for msg in new_messages:
             role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
             if role == "assistant":
@@ -158,7 +181,6 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         logger.error(f"对话接口异常：{str(e)}", exc_info=True)
         return {"code": 500, "error": str(e)}
 
-
 # ==================== 2. SSE 流式对话接口 ====================
 @router.post("/chat/stream", summary="流式对话接口")
 @limiter.limit("30/minute")
@@ -166,7 +188,7 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
     current_trace_id = set_trace()
     if request_body.user_api_key:
         logger.info(f"[自定义Key] 使用用户 Key: {mask_api_key(request_body.user_api_key)}")
-        set_llm_client(request_body.user_api_key, request_body.user_base_url)
+        set_llm_client(request_body.user_api_key, request_body.user_base_url, request_body.user_model_name)
 
     session_id = request_body.session_id or str(uuid.uuid4())
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
@@ -195,6 +217,10 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
     if known_info:
         user_content = "内部参考数据：\n" + "\n".join(known_info) + "\n\n用户问题：" + request_body.message + "\n\n要求：1. 参考数据直接使用。2. 省略问法默认查天气，直接调用工具。3. 绝对禁止复述参考数据，禁止提已知信息，禁止问是否重新查询，直接输出简洁结果。"
 
+    if request_body.enable_web_search:
+        logger.info("[强制联网] 用户开启了联网搜索开关 (流式)")
+        user_content = f"【系统强制指令】用户已开启联网搜索，请务必优先调用 search_web 工具查询最新资讯。\n{user_content}"
+
     logger.info("【最终用户输入(流式)】\n" + user_content + "\n")
     messages.append({"role": "user", "content": user_content})
     save_message(db, session_id, "user", request_body.message)
@@ -204,55 +230,42 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
             yield f"data: {json.dumps({'event': 'thinking', 'data': '正在思考...'})}\n\n"
             await asyncio.sleep(0.1)
 
-            # ========== 时间拦截（流式） ==========
             if is_time_question:
                 real_time = get_current_time()
-                messages.append({"role": "system", "content": f"实时时间结果：{real_time}。请基于这个结果用自然口语回答用户。"})
-                resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
-                final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
+                final_answer = f"当前时间是：{real_time}。"
                 thought_process = f"【执行链路】\n\n第1步 获取实时时间\n\n第2步 返回结果：{real_time}"
-                
                 save_message(db, session_id, "assistant", final_answer, thought_process)
-
                 yield f"data: {json.dumps({'event': 'thinking_start'}, ensure_ascii=False)}\n\n"
                 for char in thought_process:
                     yield f"data: {json.dumps({'event': 'thinking', 'data': char}, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0.005)
                 yield f"data: {json.dumps({'event': 'thinking_done'}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.2)
-
                 for char in final_answer:
                     yield f"data: {json.dumps({'event': 'content', 'data': char}, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0.03)
                 yield f"data: {json.dumps({'event': 'done', 'trace_id': current_trace_id, 'session_id': session_id}, ensure_ascii=False)}\n\n"
                 return
 
-            # ========== 计算拦截（流式） ==========
             if is_calc_question and not is_time_question:
                 expr_match = re.search(r'[\d+\-*/().\s]+', request_body.message)
                 expression = expr_match.group().strip() if expr_match else request_body.message
                 calc_result = calculate_expression(expression)
-                messages.append({"role": "system", "content": f"工具计算结果：{calc_result}。请仅基于这个数学结果用自然语言回答，附带计算过程，不要发散。"})
-                resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
-                final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
+                final_answer = f"{calc_result}。"
                 thought_process = f"【执行链路】\n\n第1步 调用工具：calculate_expression\n参数：{{\"expression\": \"{expression}\"}}\n\n第2步 返回结果：{calc_result}"
-                
                 save_message(db, session_id, "assistant", final_answer, thought_process)
-
                 yield f"data: {json.dumps({'event': 'thinking_start'}, ensure_ascii=False)}\n\n"
                 for char in thought_process:
                     yield f"data: {json.dumps({'event': 'thinking', 'data': char}, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0.005)
                 yield f"data: {json.dumps({'event': 'thinking_done'}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.2)
-
                 for char in final_answer:
                     yield f"data: {json.dumps({'event': 'content', 'data': char}, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(0.03)
                 yield f"data: {json.dumps({'event': 'done', 'trace_id': current_trace_id, 'session_id': session_id}, ensure_ascii=False)}\n\n"
                 return
 
-            # ========== Agent 逻辑（流式） ==========
             input_len = len(messages)
             result = agent_app.invoke({"messages": messages, "session_id": session_id, "retry_count": 0})
             final_messages = result["messages"]
@@ -262,7 +275,6 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
             step_list = []
             step_index = 1
             new_messages = final_messages[input_len:]
-            
             for msg in new_messages:
                 role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
                 if role == "assistant":
@@ -321,7 +333,6 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
             yield f"data: {json.dumps({'event': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-
 
 # ==================== 3. 多会话管理接口 ====================
 @router.get("/sessions", summary="获取所有会话列表")

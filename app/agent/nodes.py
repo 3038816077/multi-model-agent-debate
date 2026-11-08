@@ -1,11 +1,9 @@
 import json
 import concurrent.futures
-from app.core.config import MODEL_NAME
 from app.core.logger import logger, get_trace, set_trace
 from app.tools.registry import TOOL_SCHEMAS, execute_tool
 from app.agent.state import State
-# 👇 引入新增的 get_llm_context 和 set_llm_context
-from app.core.llm_factory import get_llm_client, get_llm_context, set_llm_context
+from app.core.llm_factory import get_llm_client, get_model_name, get_llm_context, set_llm_context
 
 def llm_node(state: State):
     messages = state["messages"]
@@ -22,7 +20,7 @@ def llm_node(state: State):
             logger.info("[路由控制] 检测到首次天气查询，强制模型调用工具...")
 
     resp = get_llm_client().chat.completions.create(
-        model=MODEL_NAME, 
+        model=get_model_name(), 
         messages=messages, 
         tools=TOOL_SCHEMAS, 
         tool_choice=tool_choice
@@ -43,16 +41,12 @@ def tool_node(state: State):
     tool_results = []
     has_error = False
     
-    # 👇 获取当前主线程的上下文
     current_trace_id = get_trace()
-    current_llm_client = get_llm_context()
+    current_llm_client, current_model_name = get_llm_context()
 
     def run_single_tool(tool_call):
-        # 👇 核心修复：在子线程中恢复 Trace ID 和 LLM Client 上下文
         set_trace(current_trace_id)
-        if current_llm_client:
-            set_llm_context(current_llm_client)
-            
+        set_llm_context(current_llm_client, current_model_name)
         try:
             tool_args = json.loads(tool_call.function.arguments)
         except Exception:
@@ -63,13 +57,10 @@ def tool_node(state: State):
     max_workers = min(len(last_message.tool_calls), 5)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(run_single_tool, tc) for tc in last_message.tool_calls]
-        
         for future in futures:
             tool_call, content = future.result()
-            
             if content.startswith(("错误：", "工具执行异常：", "查询失败：", "知识库检索失败：")):
                 has_error = True
-                
             tool_results.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
@@ -82,17 +73,11 @@ def tool_node(state: State):
     if has_error:
         if retry_count < 2:
             logger.warning(f"工具报错，触发大模型自愈重试 (第 {retry_count + 1} 次)")
-            new_messages.append({
-                "role": "system", 
-                "content": "上一次工具调用报错了，请仔细检查你的参数，修正后重新调用工具。"
-            })
+            new_messages.append({"role": "system", "content": "上一次工具调用报错了，请仔细检查你的参数，修正后重新调用工具。"})
             return {"messages": new_messages, "retry_count": retry_count + 1}
         else:
             logger.error("工具连续报错达到上限，停止重试")
-            new_messages.append({
-                "role": "system", 
-                "content": "工具已多次报错，请不要再次调用工具，直接如实告知用户工具暂时不可用，并给出友好提示。"
-            })
+            new_messages.append({"role": "system", "content": "工具已多次报错，请不要再次调用工具，直接如实告知用户工具暂时不可用，并给出友好提示。"})
             return {"messages": new_messages, "retry_count": retry_count}
 
     return {"messages": new_messages, "retry_count": 0}
