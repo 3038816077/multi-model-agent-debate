@@ -1,5 +1,7 @@
 import re
-from app.core.config import client, MODEL_NAME
+from app.core.config import MODEL_NAME
+# 👇 引入动态 LLM 工厂
+from app.core.llm_factory import get_llm_client
 
 def clean_latex_text(text: str) -> str:
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
@@ -26,7 +28,11 @@ def generate_dialog_summary(old_messages: list) -> str:
         if role in ["user", "assistant", "tool"]:
             dialog_text += f"{role}: {content}\n"
     
-    resp = client.chat.completions.create(model=MODEL_NAME, messages=[{"role": "user", "content": prompt + dialog_text}])
+    # 👇 替换为动态获取 Client
+    resp = get_llm_client().chat.completions.create(
+        model=MODEL_NAME, 
+        messages=[{"role": "user", "content": prompt + dialog_text}]
+    )
     return "【历史对话摘要】" + resp.choices[0].message.content
 
 def extract_long_term_memory(messages: list, existing_memory: str = "") -> str:
@@ -50,6 +56,10 @@ def extract_long_term_memory(messages: list, existing_memory: str = "") -> str:
     if not dialog_text:
         return existing_memory
     
-    resp = client.chat.completions.create(model=MODEL_NAME, messages=[{"role": "user", "content": prompt.format(old_memory=existing_memory, dialog=dialog_text)}])
+    # 👇 替换为动态获取 Client
+    resp = get_llm_client().chat.completions.create(
+        model=MODEL_NAME, 
+        messages=[{"role": "user", "content": prompt.format(old_memory=existing_memory, dialog=dialog_text)}]
+    )
     new_memory = resp.choices[0].message.content.strip()
     return new_memory if new_memory != "空" else existing_memory

@@ -1,10 +1,11 @@
 import json
 import concurrent.futures
-from app.core.config import client, MODEL_NAME
-# 👇 确保顶部有这三个导入
-from app.core.logger import logger, get_trace, set_trace 
+from app.core.config import MODEL_NAME
+from app.core.logger import logger, get_trace, set_trace
 from app.tools.registry import TOOL_SCHEMAS, execute_tool
 from app.agent.state import State
+# 👇 引入新增的 get_llm_context 和 set_llm_context
+from app.core.llm_factory import get_llm_client, get_llm_context, set_llm_context
 
 def llm_node(state: State):
     messages = state["messages"]
@@ -20,7 +21,12 @@ def llm_node(state: State):
             tool_choice = "required"
             logger.info("[路由控制] 检测到首次天气查询，强制模型调用工具...")
 
-    resp = client.chat.completions.create(model=MODEL_NAME, messages=messages, tools=TOOL_SCHEMAS, tool_choice=tool_choice)
+    resp = get_llm_client().chat.completions.create(
+        model=MODEL_NAME, 
+        messages=messages, 
+        tools=TOOL_SCHEMAS, 
+        tool_choice=tool_choice
+    )
     msg = resp.choices[0].message
     logger.info(f"[LLM返回] 内容: {msg.content}, 工具调用: {msg.tool_calls}")
     return {"messages": messages + [msg]}
@@ -37,12 +43,16 @@ def tool_node(state: State):
     tool_results = []
     has_error = False
     
-    # 👇 核心修复：在主线程中获取当前的 Trace ID
+    # 👇 获取当前主线程的上下文
     current_trace_id = get_trace()
+    current_llm_client = get_llm_context()
 
     def run_single_tool(tool_call):
-        # 👇 核心修复：在子线程中强制注入主线程的 Trace ID，防止日志变成 [SYSTEM]
+        # 👇 核心修复：在子线程中恢复 Trace ID 和 LLM Client 上下文
         set_trace(current_trace_id)
+        if current_llm_client:
+            set_llm_context(current_llm_client)
+            
         try:
             tool_args = json.loads(tool_call.function.arguments)
         except Exception:
@@ -50,7 +60,6 @@ def tool_node(state: State):
         content = execute_tool(tool_call.function.name, tool_args, session_id)
         return tool_call, content
 
-    # 开启线程池并发
     max_workers = min(len(last_message.tool_calls), 5)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(run_single_tool, tc) for tc in last_message.tool_calls]
@@ -58,7 +67,6 @@ def tool_node(state: State):
         for future in futures:
             tool_call, content = future.result()
             
-            # 👇 核心修改：改为精准前缀匹配，防止知识库正常文本“误触”自愈机制
             if content.startswith(("错误：", "工具执行异常：", "查询失败：", "知识库检索失败：")):
                 has_error = True
                 
@@ -71,7 +79,6 @@ def tool_node(state: State):
     
     new_messages = messages + tool_results
     
-    # 错误自愈逻辑控制
     if has_error:
         if retry_count < 2:
             logger.warning(f"工具报错，触发大模型自愈重试 (第 {retry_count + 1} 次)")

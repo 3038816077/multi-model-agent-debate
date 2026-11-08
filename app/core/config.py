@@ -13,8 +13,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 QWEATHER_API_KEY = os.getenv("QWEATHER_API_KEY")
 SERVER_PORT = int(os.getenv("SERVER_PORT", 8000))
 MAX_HISTORY_LENGTH = int(os.getenv("MAX_HISTORY_LENGTH", 20))
-
-client = OpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
+# 删掉或替换原来的 client 初始化
+try:
+    client = OpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
+except Exception:
+    client = None
 MODEL_NAME = "qwen-plus"
 
 # ========== RAG 检索配置 ==========

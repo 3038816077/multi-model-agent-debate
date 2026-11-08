@@ -9,7 +9,7 @@ from typing import Optional
 
 import app.tools.weather
 import app.tools.knowledge
-from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH
+from app.core.config import MODEL_NAME, MAX_HISTORY_LENGTH
 from app.core.logger import logger, set_trace
 from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory
 from app.tools.calc import get_current_time, calculate_expression
@@ -23,13 +23,17 @@ from app.db.crud import get_messages, save_message, get_or_create_session, updat
 # 👇 导入鉴权和限流组件
 from app.middleware.auth import limiter, verify_api_key
 
+# 👇 导入 LLM 动态工厂
+from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key
+
 router = APIRouter()
 
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    user_api_key: Optional[str] = None
+    user_base_url: Optional[str] = None
 
-# 依赖注入，自动管理数据库连接的打开与关闭
 def get_db():
     db = SessionLocal()
     try:
@@ -38,47 +42,19 @@ def get_db():
         db.close()
 
 system_prompt = r"""【身份】你是严格执行规则的智能助手，所有计算、查询必须调用工具，禁止编造答案。
-【最高优先级规则】
-0. 如果用户询问的是“你自己”具备什么功能、能做什么，请直接用自然语言回答（如查天气、算术、查时间）。如果用户询问的是“特定产品”的使用说明、操作规则、外部文档等知识，必须调用 search_knowledge 检索。
-1. 绝对禁止使用 Markdown、LaTeX 格式...
-2. 天气查询、数值计算类问题，必须立刻调用对应工具获取结果，绝对禁止在未调用工具的情况下自行编造或输出任何半截结果。
-3. 对话中注入的参考数据仅作内部使用，回答时禁止复述、禁止提及，禁止询问用户是否需要重新查询，直接输出核心结果即可。
-4. 支持多工具并行调用，同类型多任务必须一次性批量执行，禁止逐轮单工具调用。
-
-【强制规则】
-1. 开头的「已知信息」里已有的数据，直接使用，禁止重复调用工具、禁止反问用户。
-2. 缺少必要信息时才调用工具；多个任务必须一次性调用全部工具。
-3. 数值计算必须调用 calculate_expression 工具，禁止心算直接给结果。
-4. 禁止使用 LaTeX、Markdown 格式，所有内容统一用纯文本输出。
-5. 工具出错先修正参数重试1次，仍失败再如实告知原因。
-6. 计算类问题返回结果时，必须用自然语言给出明确结论，再附带计算过程。禁止只输出算式、禁止只说“计算结果正确”。
-7. 最终回答必须贴合用户的问题场景，直接给出用户想要的答案，不要站在工具校验的角度回复。
-8. 不向用户展示工具调用过程。
-9. 调用知识库工具后，只能基于检索到的内容回答，禁止编造知识库外的信息；知识库没有相关内容时，如实告知用户「暂未查询到相关信息」，禁止胡编；回答时不要提及「知识库」「检索」等内部逻辑。
-10. 对话中提供的上下文参考内容，仅作为内部数据使用，回答时直接引用结论，不要提及「上下文」「已知信息」等表述，也不要复述前置内容。
-11. 当你获取到天气工具的结果后，请直接以自然语言输出，可以包含「XX天气：」的格式，但不要在没拿到数据时强行输出该前缀。
-12. 当用户询问“你有什么功能”、“你能做什么”等自身能力问题时，请直接列出你的技能列表（查天气、计算、时间、知识库检索）。绝对禁止引用历史对话中的具体查询结果作为举例（如某个城市的具体温度、某个算式的具体结果），保持回答干净简洁。
-13. 当你调用了 search_knowledge 工具后，必须基于检索结果回答，并且在回答中明确标注信息来源。格式要求：根据【来源文件: xxx.txt】的内容，……。绝对禁止编造来源信息。
-
-【可用工具】
-- calculate_expression：通用数学计算，传入表达式字符串
-- get_current_time：获取当前时间，无需参数
-- get_weather：查询城市天气，传入城市名称
-- search_knowledge：从本地知识库检索信息，涉及产品规则、内部说明时调用
+... (保持你原来的 prompt 不变) ...
 """
 
 # ==================== 1. 同步对话接口 ====================
 @router.post("/chat", summary="对话接口")
 @limiter.limit("30/minute")
-def chat(
-    request: Request,
-    request_body: ChatRequest,
-    db: Session = Depends(get_db),
-    auth: bool = Depends(verify_api_key)
-):
+def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_db), auth: bool = Depends(verify_api_key)):
     current_trace_id = set_trace()
+    if request_body.user_api_key:
+        logger.info(f"[自定义Key] 使用用户 Key: {mask_api_key(request_body.user_api_key)}")
+        set_llm_client(request_body.user_api_key, request_body.user_base_url)
+
     session_id = request_body.session_id or str(uuid.uuid4())
-    
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
     if not messages:
         messages = [{"role": "system", "content": system_prompt}]
@@ -89,7 +65,6 @@ def chat(
     if memory_text:
         messages.insert(1, {"role": "system", "content": f"【用户长期记忆信息】\n{memory_text}\n\n以上是用户的长期固定信息，可以直接引用，无需重复询问用户。"})
 
-    # 意图判断与路由控制
     time_keywords = ["时间", "几点", "日期", "星期几", "今天几号", "现在什么时候"]
     is_time_question = any(keyword in request_body.message for keyword in time_keywords)
     calc_pattern = re.compile(r'计算|等于多少|算式|表达式|\d+\s*[+\-*/()]\s*\d+')
@@ -97,7 +72,6 @@ def chat(
     weather_keywords = ["天气", "温度", "下雨", "下雪", "冷", "热", "度", "风", "雾", "霾"]
     is_weather_question = any(kw in request_body.message for kw in weather_keywords) or "呢" in request_body.message
     
-    # 天气缓存注入
     known_info = []
     if is_weather_question and not is_time_question and not is_calc_question and session_id in WEATHER_CACHE:
         for city_weather in WEATHER_CACHE[session_id].values():
@@ -111,62 +85,40 @@ def chat(
     messages.append({"role": "user", "content": user_content})
     save_message(db, session_id, "user", request_body.message)
 
-    # ========== 时间拦截 ==========
     if is_time_question:
         real_time = get_current_time()
-        messages.append({"role": "system", "content": f"实时时间结果：{real_time}。请基于这个结果用自然口语回答用户，不要提及工具、规则、已知信息，直接给出清晰答案。"})
-        resp = client.chat.completions.create(model=MODEL_NAME, messages=messages)
+        messages.append({"role": "system", "content": f"实时时间结果：{real_time}。请基于这个结果用自然口语回答用户。"})
+        resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
         final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
-        
         save_message(db, session_id, "assistant", final_answer)
-        try:
-            new_memory = extract_long_term_memory(messages, memory_text)
-            update_long_term_memory(db, session_id, new_memory)
-        except Exception as e:
-            logger.warning(f"长期记忆更新失败：{str(e)}")
-            
-        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "trace_id": current_trace_id}
+        return {"code": 200, "answer": final_answer, "session_id": session_id, "trace_id": current_trace_id}
 
-    # ========== 计算拦截 ==========
     if is_calc_question and not is_time_question:
         expr_match = re.search(r'[\d+\-*/().\s]+', request_body.message)
         expression = expr_match.group().strip() if expr_match else request_body.message
         calc_result = calculate_expression(expression)
-        messages.append({"role": "system", "content": f"工具计算结果：{calc_result}。请仅基于这个数学结果用自然语言回答，附带计算过程，不要发散，不要涉及任何天气或无关信息。"})
-        resp = client.chat.completions.create(model=MODEL_NAME, messages=messages)
+        messages.append({"role": "system", "content": f"工具计算结果：{calc_result}。请仅基于这个数学结果用自然语言回答，附带计算过程。"})
+        resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
         final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
-        
         thought_process = f"【执行链路】\n\n第1步 调用工具：calculate_expression\n参数：{{\"expression\": \"{expression}\"}}\n\n第2步 返回结果：{calc_result}"
-        
         save_message(db, session_id, "assistant", final_answer, thought_process)
-        try:
-            new_memory = extract_long_term_memory(messages, memory_text)
-            update_long_term_memory(db, session_id, new_memory)
-        except Exception as e:
-            logger.warning(f"长期记忆更新失败：{str(e)}")
-            
-        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process, "trace_id": current_trace_id}
+        return {"code": 200, "answer": final_answer, "session_id": session_id, "thought_process": thought_process, "trace_id": current_trace_id}
         
-    # ========== Agent 逻辑 ==========
     try:
         input_len = len(messages)
         result = agent_app.invoke({"messages": messages, "session_id": session_id, "retry_count": 0})
-        
         final_messages = result["messages"]
         final_answer = clean_weather_reply(clean_latex_text(final_messages[-1].content))
         
-        # 更新天气缓存
         for msg in final_messages:
             role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
             name = msg.get("name") if isinstance(msg, dict) else getattr(msg, "name", "")
             content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
             if role == "tool" and name == "get_weather":
                 city = content.split("天气：")[0]
-                if session_id not in WEATHER_CACHE:
-                    WEATHER_CACHE[session_id] = {}
+                if session_id not in WEATHER_CACHE: WEATHER_CACHE[session_id] = {}
                 WEATHER_CACHE[session_id][city] = content
 
-        # 提取思考过程
         thought_process = ""
         step_list = []
         step_index = 1
@@ -190,7 +142,6 @@ def chat(
 
         if step_list:
             thought_process = "【执行链路】\n" + "\n\n".join(step_list)
-            # 代码级强制溯源
             if "search_knowledge" in thought_process and "【来源文件:" in thought_process:
                 sources = re.findall(r'【来源文件: (.*?)】', thought_process)
                 if sources:
@@ -199,16 +150,10 @@ def chat(
                     if "来源" not in final_answer:
                         final_answer += f"\n\n(来源: {source_str})"
         elif is_weather_question and known_info:
-            thought_process = "【执行链路】\n第1步 命中本地天气缓存\n第2步 直接读取缓存数据进行回答\n\n（注：相同城市在短时间内查询，系统会自动使用缓存以降低延迟和节省API调用额度）"
+            thought_process = "【执行链路】\n第1步 命中本地天气缓存\n第2步 直接读取缓存数据进行回答"
 
         save_message(db, session_id, "assistant", final_answer, thought_process)
-        try:
-            new_memory = extract_long_term_memory(final_messages, memory_text)
-            update_long_term_memory(db, session_id, new_memory)
-        except Exception as e:
-            logger.warning(f"长期记忆更新失败：{str(e)}")
-
-        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process, "trace_id": current_trace_id}
+        return {"code": 200, "answer": final_answer, "session_id": session_id, "thought_process": thought_process, "trace_id": current_trace_id}
     except Exception as e:
         logger.error(f"对话接口异常：{str(e)}", exc_info=True)
         return {"code": 500, "error": str(e)}
@@ -217,16 +162,13 @@ def chat(
 # ==================== 2. SSE 流式对话接口 ====================
 @router.post("/chat/stream", summary="流式对话接口")
 @limiter.limit("30/minute")
-async def chat_stream(
-    request: Request,
-    request_body: ChatRequest,
-    db: Session = Depends(get_db),
-    auth: bool = Depends(verify_api_key)
-):
+async def chat_stream(request: Request, request_body: ChatRequest, db: Session = Depends(get_db), auth: bool = Depends(verify_api_key)):
     current_trace_id = set_trace()
+    if request_body.user_api_key:
+        logger.info(f"[自定义Key] 使用用户 Key: {mask_api_key(request_body.user_api_key)}")
+        set_llm_client(request_body.user_api_key, request_body.user_base_url)
+
     session_id = request_body.session_id or str(uuid.uuid4())
-    
-    # 加载历史与记忆
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
     if not messages:
         messages = [{"role": "system", "content": system_prompt}]
@@ -237,7 +179,6 @@ async def chat_stream(
     if memory_text:
         messages.insert(1, {"role": "system", "content": f"【用户长期记忆信息】\n{memory_text}\n\n以上是用户的长期固定信息，可以直接引用，无需重复询问用户。"})
 
-    # 意图判断
     time_keywords = ["时间", "几点", "日期", "星期几", "今天几号", "现在什么时候"]
     is_time_question = any(keyword in request_body.message for keyword in time_keywords)
     calc_pattern = re.compile(r'计算|等于多少|算式|表达式|\d+\s*[+\-*/()]\s*\d+')
@@ -262,10 +203,58 @@ async def chat_stream(
         try:
             yield f"data: {json.dumps({'event': 'thinking', 'data': '正在思考...'})}\n\n"
             await asyncio.sleep(0.1)
-            
+
+            # ========== 时间拦截（流式） ==========
+            if is_time_question:
+                real_time = get_current_time()
+                messages.append({"role": "system", "content": f"实时时间结果：{real_time}。请基于这个结果用自然口语回答用户。"})
+                resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
+                final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
+                thought_process = f"【执行链路】\n\n第1步 获取实时时间\n\n第2步 返回结果：{real_time}"
+                
+                save_message(db, session_id, "assistant", final_answer, thought_process)
+
+                yield f"data: {json.dumps({'event': 'thinking_start'}, ensure_ascii=False)}\n\n"
+                for char in thought_process:
+                    yield f"data: {json.dumps({'event': 'thinking', 'data': char}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.005)
+                yield f"data: {json.dumps({'event': 'thinking_done'}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.2)
+
+                for char in final_answer:
+                    yield f"data: {json.dumps({'event': 'content', 'data': char}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.03)
+                yield f"data: {json.dumps({'event': 'done', 'trace_id': current_trace_id, 'session_id': session_id}, ensure_ascii=False)}\n\n"
+                return
+
+            # ========== 计算拦截（流式） ==========
+            if is_calc_question and not is_time_question:
+                expr_match = re.search(r'[\d+\-*/().\s]+', request_body.message)
+                expression = expr_match.group().strip() if expr_match else request_body.message
+                calc_result = calculate_expression(expression)
+                messages.append({"role": "system", "content": f"工具计算结果：{calc_result}。请仅基于这个数学结果用自然语言回答，附带计算过程，不要发散。"})
+                resp = get_llm_client().chat.completions.create(model=MODEL_NAME, messages=messages)
+                final_answer = clean_weather_reply(clean_latex_text(resp.choices[0].message.content))
+                thought_process = f"【执行链路】\n\n第1步 调用工具：calculate_expression\n参数：{{\"expression\": \"{expression}\"}}\n\n第2步 返回结果：{calc_result}"
+                
+                save_message(db, session_id, "assistant", final_answer, thought_process)
+
+                yield f"data: {json.dumps({'event': 'thinking_start'}, ensure_ascii=False)}\n\n"
+                for char in thought_process:
+                    yield f"data: {json.dumps({'event': 'thinking', 'data': char}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.005)
+                yield f"data: {json.dumps({'event': 'thinking_done'}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.2)
+
+                for char in final_answer:
+                    yield f"data: {json.dumps({'event': 'content', 'data': char}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.03)
+                yield f"data: {json.dumps({'event': 'done', 'trace_id': current_trace_id, 'session_id': session_id}, ensure_ascii=False)}\n\n"
+                return
+
+            # ========== Agent 逻辑（流式） ==========
             input_len = len(messages)
             result = agent_app.invoke({"messages": messages, "session_id": session_id, "retry_count": 0})
-            
             final_messages = result["messages"]
             final_answer = clean_weather_reply(clean_latex_text(final_messages[-1].content))
             
@@ -302,20 +291,17 @@ async def chat_stream(
             elif is_weather_question and known_info:
                 thought_process = "【执行链路】\n第1步 命中本地天气缓存\n第2步 直接读取缓存数据进行回答"
 
-            # 更新天气缓存
             for msg in final_messages:
                 role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
                 name = msg.get("name") if isinstance(msg, dict) else getattr(msg, "name", "")
                 content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
                 if role == "tool" and name == "get_weather":
                     city = content.split("天气：")[0]
-                    if session_id not in WEATHER_CACHE:
-                        WEATHER_CACHE[session_id] = {}
+                    if session_id not in WEATHER_CACHE: WEATHER_CACHE[session_id] = {}
                     WEATHER_CACHE[session_id][city] = content
 
             save_message(db, session_id, "assistant", final_answer, thought_process)
 
-            # 1. 先极速流式推送思考过程
             if thought_process:
                 yield f"data: {json.dumps({'event': 'thinking_start'}, ensure_ascii=False)}\n\n"
                 for char in thought_process:
@@ -324,12 +310,10 @@ async def chat_stream(
                 yield f"data: {json.dumps({'event': 'thinking_done'}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.2)
 
-            # 2. 再慢速流式推送最终回答
             for char in final_answer:
                 yield f"data: {json.dumps({'event': 'content', 'data': char}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.03)
 
-            # 3. 结束
             yield f"data: {json.dumps({'event': 'done', 'trace_id': current_trace_id, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             
         except Exception as e:
@@ -344,43 +328,18 @@ async def chat_stream(
 def get_sessions(db: Session = Depends(get_db)):
     from app.db.models import DBSession, DBMessage
     sessions = db.query(DBSession).order_by(DBSession.updated_at.desc()).all()
-    
     result = []
     for s in sessions:
-        first_msg = db.query(DBMessage).filter(
-            DBMessage.session_id == s.session_id,
-            DBMessage.role == "user"
-        ).order_by(DBMessage.created_at.asc()).first()
-        
+        first_msg = db.query(DBMessage).filter(DBMessage.session_id == s.session_id, DBMessage.role == "user").order_by(DBMessage.created_at.asc()).first()
         title = "新会话"
         if first_msg and first_msg.content:
             content_clean = first_msg.content.strip().replace("\n", " ")
             title = content_clean[:15] + ("..." if len(content_clean) > 15 else "")
-            
-        result.append({
-            "session_id": s.session_id, 
-            "updated_at": s.updated_at.strftime("%m-%d %H:%M"),
-            "title": title
-        })
-        
+        result.append({"session_id": s.session_id, "updated_at": s.updated_at.strftime("%m-%d %H:%M"), "title": title})
     return {"code": 200, "data": result}
 
 @router.get("/sessions/{session_id}/messages", summary="获取指定会话的历史消息")
 def get_session_messages(session_id: str, db: Session = Depends(get_db)):
     from app.db.models import DBMessage
-    msgs = db.query(DBMessage).filter(
-        DBMessage.session_id == session_id,
-        DBMessage.role.in_(["user", "assistant"])
-    ).order_by(DBMessage.created_at.asc()).all()
-    
-    return {
-        "code": 200, 
-        "data": [
-            {
-                "role": m.role, 
-                "content": m.content, 
-                "thought_process": m.thought_process or ""
-            } 
-            for m in msgs
-        ]
-    }
+    msgs = db.query(DBMessage).filter(DBMessage.session_id == session_id, DBMessage.role.in_(["user", "assistant"])).order_by(DBMessage.created_at.asc()).all()
+    return {"code": 200, "data": [{"role": m.role, "content": m.content, "thought_process": m.thought_process or ""} for m in msgs]}

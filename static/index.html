@@ -7,9 +7,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; height: 100vh; display: flex; justify-content: center; align-items: center; }
-        .app-container { width: 100%; max-width: 1100px; height: 92vh; display: flex; gap: 16px; }
-        
-        /* 左侧侧边栏 */
+        .app-container { width: 100%; max-width: 1100px; height: 92vh; display: flex; gap: 16px; position: relative; }
         .sidebar { width: 260px; background: #ffffff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; overflow: hidden; }
         .sidebar-header { padding: 16px; border-bottom: 1px solid #f0f0f0; }
         .new-chat-btn { width: 100%; padding: 10px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
@@ -18,12 +16,12 @@
         .session-item { padding: 10px 12px; margin-bottom: 6px; border-radius: 8px; font-size: 13px; color: #374151; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: background 0.2s; }
         .session-item:hover { background: #f3f4f6; }
         .session-item.active { background: #eff6ff; color: #2563eb; font-weight: 500; }
-        
-        /* 右侧聊天区域 */
-        .chat-container { flex: 1; background: #ffffff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; overflow: hidden; }
-        .chat-header { background: #2563eb; color: #fff; padding: 18px 24px; }
+        .chat-container { flex: 1; background: #ffffff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; overflow: hidden; position: relative; }
+        .chat-header { background: #2563eb; color: #fff; padding: 18px 24px; display: flex; justify-content: space-between; align-items: flex-start; }
         .chat-header .title { font-size: 17px; font-weight: 500; margin-bottom: 4px; }
         .chat-header .subtitle { font-size: 13px; opacity: 0.85; }
+        .settings-btn { background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.5); padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; transition: background 0.2s; }
+        .settings-btn:hover { background: rgba(255,255,255,0.3); }
         .quick-btns { padding: 12px 24px; border-bottom: 1px solid #f0f0f0; display: flex; gap: 8px; flex-wrap: wrap; }
         .quick-btn { padding: 6px 12px; border: 1px solid #d1d5db; background: #f9fafb; border-radius: 6px; font-size: 13px; color: #374151; cursor: pointer; transition: all 0.2s; }
         .quick-btn:hover { background: #eff6ff; border-color: #2563eb; color: #2563eb; }
@@ -36,32 +34,39 @@
         .thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
         .thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
         @keyframes bounce { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
-        
-        /* 思考过程样式 */
         .thought-toggle { font-size: 12px; color: #6b7280; cursor: pointer; margin-top: 8px; text-decoration: underline; display: none; user-select: none;}
         .thought-content { margin-top: 8px; padding: 10px; background: #ffffff; border-radius: 6px; font-size: 12px; font-family: Consolas, monospace; white-space: pre-wrap; display: none; border: 1px solid #e5e7eb; max-height: 250px; overflow-y: auto;}
-        
         .chat-input-area { padding: 16px 24px; border-top: 1px solid #f0f0f0; display: flex; gap: 10px; }
         #userInput { flex: 1; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 15px; outline: none; }
         #sendBtn { padding: 0 22px; background: #2563eb; color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; }
         #sendBtn:disabled { background: #93c5fd; cursor: not-allowed; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: #fff; padding: 24px; border-radius: 12px; width: 420px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); }
+        .modal-content h3 { margin-bottom: 16px; font-size: 18px; color: #1f2937; }
+        .modal-content label { font-size: 13px; color: #4b5563; font-weight: 500; }
+        .modal-content input { width: 100%; padding: 10px; margin-top: 6px; margin-bottom: 16px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; outline: none; }
+        .modal-content input:focus { border-color: #2563eb; }
+        .modal-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+        .modal-btns button { padding: 8px 16px; border-radius: 6px; font-size: 14px; cursor: pointer; border: none; }
+        .btn-cancel { background: #f3f4f6; color: #374151; }
+        .btn-save { background: #2563eb; color: #fff; }
     </style>
 </head>
 <body>
     <div class="app-container">
-        <!-- 左侧侧边栏 -->
         <div class="sidebar">
             <div class="sidebar-header">
                 <button class="new-chat-btn" onclick="createNewChat()">+ 新建对话</button>
             </div>
             <div class="session-list" id="sessionList"></div>
         </div>
-
-        <!-- 右侧聊天区 -->
         <div class="chat-container">
             <div class="chat-header">
-                <div class="title">智能助手 · 多工具 Agent</div>
-                <div class="subtitle">基于 LangGraph + ReAct | 深度流式输出</div>
+                <div>
+                    <div class="title">智能助手 · 多工具 Agent</div>
+                    <div class="subtitle">基于 LangGraph + ReAct | 深度流式输出</div>
+                </div>
+                <button class="settings-btn" onclick="openSettings()">⚙️ 模型配置</button>
             </div>
             <div class="quick-btns">
                 <button class="quick-btn" onclick="quickSend('北京天气怎么样')">北京天气怎么样</button>
@@ -76,7 +81,19 @@
             </div>
         </div>
     </div>
-
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal-content">
+            <h3>自定义模型配置</h3>
+            <label>自定义接口地址 (可选)</label>
+            <input type="text" id="userBaseUrl" placeholder="例如：https://api.deepseek.com/v1">
+            <label>API Key (仅保存在您本地浏览器)</label>
+            <input type="password" id="userApiKey" placeholder="sk-...">
+            <div class="modal-btns">
+                <button class="btn-cancel" onclick="closeSettings()">取消</button>
+                <button class="btn-save" onclick="saveSettings()">保存配置</button>
+            </div>
+        </div>
+    </div>
     <script>
         let sessionId = localStorage.getItem('agent_session_id') || null;
         const chatMessages = document.getElementById('chatMessages');
@@ -84,6 +101,23 @@
         const sendBtn = document.getElementById('sendBtn');
         const sessionList = document.getElementById('sessionList');
         const API_KEY = 'my-secret-key-123';
+
+        function openSettings() {
+            document.getElementById('userApiKey').value = localStorage.getItem('user_api_key') || '';
+            document.getElementById('userBaseUrl').value = localStorage.getItem('user_base_url') || '';
+            document.getElementById('settingsModal').style.display = 'flex';
+        }
+        function closeSettings() {
+            document.getElementById('settingsModal').style.display = 'none';
+        }
+        function saveSettings() {
+            const key = document.getElementById('userApiKey').value.trim();
+            const url = document.getElementById('userBaseUrl').value.trim();
+            localStorage.setItem('user_api_key', key);
+            localStorage.setItem('user_base_url', url);
+            closeSettings();
+            alert('配置已保存在本地！');
+        }
 
         async function init() {
             await loadSessionList();
@@ -111,7 +145,6 @@
                     data.data.forEach(s => {
                         const div = document.createElement('div');
                         div.className = `session-item ${s.session_id === sessionId ? 'active' : ''}`;
-                        // 👇 核心修改：展示 title，并加入省略号样式
                         div.innerHTML = `<span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; margin-right: 8px;" title="${s.title || '新会话'}">${s.title || '新会话'}</span><span style="font-size: 11px; color: #9ca3af; flex-shrink: 0;">${s.updated_at}</span>`;
                         div.onclick = () => switchSession(s.session_id);
                         sessionList.appendChild(div);
@@ -196,7 +229,12 @@
                 const response = await fetch('/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-                    body: JSON.stringify({ message: text, session_id: sessionId })
+                    body: JSON.stringify({ 
+                        message: text, 
+                        session_id: sessionId,
+                        user_api_key: localStorage.getItem('user_api_key') || null,
+                        user_base_url: localStorage.getItem('user_base_url') || null
+                    })
                 });
 
                 thinkingDiv.remove(); 
@@ -269,10 +307,15 @@
                                     if (thinkingQueue.length === 0) {
                                         clearInterval(checkQueue);
                                         toggle.textContent = '收起思考过程';
-                                        isTypingThinking = false;
+                                        isTypingThinking = false; // 切换到回答模式
                                     }
                                 }, 50);
                             } else if (payload.event === 'content') {
+                                // 如果因为某些原因没收到 thinking_done，这里做个兜底强制切换
+                                if (isTypingThinking && thinkingQueue.length === 0) {
+                                    isTypingThinking = false;
+                                    if (thoughtDiv.textContent === "") toggle.style.display = 'none';
+                                }
                                 answerQueue += payload.data;
                             } else if (payload.event === 'done') {
                                 sessionId = payload.session_id;
