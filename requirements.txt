@@ -16,3 +16,4 @@ jieba
 pypdf
 slowapi
 limits
+langchain-experimental

@@ -22,7 +22,9 @@ RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", 300))        # 文本切分大�
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", 50))   # 文本切分重叠度
 RAG_RECALL_TOP_K = int(os.getenv("RAG_RECALL_TOP_K", 10))     # 粗排召回数量
 RAG_FINAL_TOP_K = int(os.getenv("RAG_FINAL_TOP_K", 1))        # 精排后最终返回数量
-
+# ========== 文本分块配置 ==========
+USE_SEMANTIC_CHUNKING = os.getenv("USE_SEMANTIC_CHUNKING", "false").lower() == "true"  # 默认关闭
+SEMANTIC_CHUNK_THRESHOLD = float(os.getenv("SEMANTIC_CHUNK_THRESHOLD", 0.85))  # 语义拆分阈值(0-1)
 # ========== Agent 执行配置 ==========
 MAX_TOOL_RETRY = int(os.getenv("MAX_TOOL_RETRY", 2))          # 工具最大错误重试次数
 MAX_CONCURRENT_TOOLS = int(os.getenv("MAX_CONCURRENT_TOOLS", 5)) # 线程池最大并发数

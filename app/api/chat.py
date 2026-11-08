@@ -1,5 +1,8 @@
 import copy, uuid, re
+import asyncio
+import json
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
@@ -35,45 +38,66 @@ def get_db():
         db.close()
 
 system_prompt = r"""【身份】你是严格执行规则的智能助手，所有计算、查询必须调用工具，禁止编造答案。
-... (保持你的原版 prompt 完全不变) ...
+【最高优先级规则】
+0. 如果用户询问的是“你自己”具备什么功能、能做什么，请直接用自然语言回答（如查天气、算术、查时间）。如果用户询问的是“特定产品”的使用说明、操作规则、外部文档等知识，必须调用 search_knowledge 检索。
+1. 绝对禁止使用 Markdown、LaTeX 格式...
+2. 天气查询、数值计算类问题，必须立刻调用对应工具获取结果，绝对禁止在未调用工具的情况下自行编造或输出任何半截结果。
+3. 对话中注入的参考数据仅作内部使用，回答时禁止复述、禁止提及，禁止询问用户是否需要重新查询，直接输出核心结果即可。
+4. 支持多工具并行调用，同类型多任务必须一次性批量执行，禁止逐轮单工具调用。
+
+【强制规则】
+1. 开头的「已知信息」里已有的数据，直接使用，禁止重复调用工具、禁止反问用户。
+2. 缺少必要信息时才调用工具；多个任务必须一次性调用全部工具。
+3. 数值计算必须调用 calculate_expression 工具，禁止心算直接给结果。
+4. 禁止使用 LaTeX、Markdown 格式，所有内容统一用纯文本输出。
+5. 工具出错先修正参数重试1次，仍失败再如实告知原因。
+6. 计算类问题返回结果时，必须用自然语言给出明确结论，再附带计算过程。禁止只输出算式、禁止只说“计算结果正确”。
+7. 最终回答必须贴合用户的问题场景，直接给出用户想要的答案，不要站在工具校验的角度回复。
+8. 不向用户展示工具调用过程。
+9. 调用知识库工具后，只能基于检索到的内容回答，禁止编造知识库外的信息；知识库没有相关内容时，如实告知用户「暂未查询到相关信息」，禁止胡编；回答时不要提及「知识库」「检索」等内部逻辑。
+10. 对话中提供的上下文参考内容，仅作为内部数据使用，回答时直接引用结论，不要提及「上下文」「已知信息」等表述，也不要复述前置内容。
+11. 当你获取到天气工具的结果后，请直接以自然语言输出，可以包含「XX天气：」的格式，但不要在没拿到数据时强行输出该前缀。
+12. 当用户询问“你有什么功能”、“你能做什么”等自身能力问题时，请直接列出你的技能列表（查天气、计算、时间、知识库检索）。绝对禁止引用历史对话中的具体查询结果作为举例（如某个城市的具体温度、某个算式的具体结果），保持回答干净简洁。
+13. 当你调用了 search_knowledge 工具后，必须基于检索结果回答，并且在回答中明确标注信息来源。格式要求：根据【来源文件: xxx.txt】的内容，……。绝对禁止编造来源信息。
+
+【可用工具】
+- calculate_expression：通用数学计算，传入表达式字符串
+- get_current_time：获取当前时间，无需参数
+- get_weather：查询城市天气，传入城市名称
+- search_knowledge：从本地知识库检索信息，涉及产品规则、内部说明时调用
 """
 
+# ==================== 1. 同步对话接口 ====================
 @router.post("/chat", summary="对话接口")
-@limiter.limit("30/minute")  # 👈 限流装饰器
+@limiter.limit("30/minute")
 def chat(
-    request: Request,              # 👈 限流必须接收 Request
-    request_body: ChatRequest,     # 👈 原来的 request 改名为 request_body
+    request: Request,
+    request_body: ChatRequest,
     db: Session = Depends(get_db),
-    auth: bool = Depends(verify_api_key)  # 👈 鉴权注入
+    auth: bool = Depends(verify_api_key)
 ):
     current_trace_id = set_trace()
     session_id = request_body.session_id or str(uuid.uuid4())
     
-    # 1. 从数据库加载历史消息（只取最近的 MAX_HISTORY_LENGTH 条）
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
-    
     if not messages:
-        # 如果是新会话，初始化并存入 system prompt
         messages = [{"role": "system", "content": system_prompt}]
         save_message(db, session_id, "system", system_prompt)
 
-    # 2. 从数据库加载长期记忆
     db_session = get_or_create_session(db, session_id)
     memory_text = db_session.long_term_memory
     if memory_text:
         messages.insert(1, {"role": "system", "content": f"【用户长期记忆信息】\n{memory_text}\n\n以上是用户的长期固定信息，可以直接引用，无需重复询问用户。"})
 
-    # 3. 意图判断与路由控制
+    # 意图判断与路由控制
     time_keywords = ["时间", "几点", "日期", "星期几", "今天几号", "现在什么时候"]
     is_time_question = any(keyword in request_body.message for keyword in time_keywords)
-    
     calc_pattern = re.compile(r'计算|等于多少|算式|表达式|\d+\s*[+\-*/()]\s*\d+')
     is_calc_question = bool(calc_pattern.search(request_body.message))
-    
     weather_keywords = ["天气", "温度", "下雨", "下雪", "冷", "热", "度", "风", "雾", "霾"]
     is_weather_question = any(kw in request_body.message for kw in weather_keywords) or "呢" in request_body.message
     
-    # 👇 核心修复：注入天气缓存：只有当前问题确实在问天气时，才注入！彻底解决上下文污染
+    # 天气缓存注入
     known_info = []
     if is_weather_question and not is_time_question and not is_calc_question and session_id in WEATHER_CACHE:
         for city_weather in WEATHER_CACHE[session_id].values():
@@ -85,8 +109,6 @@ def chat(
 
     logger.info("【最终用户输入】\n" + user_content + "\n")
     messages.append({"role": "user", "content": user_content})
-    
-    # 将用户原始提问存入数据库
     save_message(db, session_id, "user", request_body.message)
 
     # ========== 时间拦截 ==========
@@ -128,12 +150,7 @@ def chat(
     # ========== Agent 逻辑 ==========
     try:
         input_len = len(messages)
-        
-        result = agent_app.invoke({
-            "messages": messages, 
-            "session_id": session_id,
-            "retry_count": 0
-        })
+        result = agent_app.invoke({"messages": messages, "session_id": session_id, "retry_count": 0})
         
         final_messages = result["messages"]
         final_answer = clean_weather_reply(clean_latex_text(final_messages[-1].content))
@@ -173,6 +190,14 @@ def chat(
 
         if step_list:
             thought_process = "【执行链路】\n" + "\n\n".join(step_list)
+            # 代码级强制溯源
+            if "search_knowledge" in thought_process and "【来源文件:" in thought_process:
+                sources = re.findall(r'【来源文件: (.*?)】', thought_process)
+                if sources:
+                    unique_sources = list(dict.fromkeys(sources))
+                    source_str = "、".join(unique_sources)
+                    if "来源" not in final_answer:
+                        final_answer += f"\n\n(来源: {source_str})"
         elif is_weather_question and known_info:
             thought_process = "【执行链路】\n第1步 命中本地天气缓存\n第2步 直接读取缓存数据进行回答\n\n（注：相同城市在短时间内查询，系统会自动使用缓存以降低延迟和节省API调用额度）"
 
@@ -187,3 +212,162 @@ def chat(
     except Exception as e:
         logger.error(f"对话接口异常：{str(e)}", exc_info=True)
         return {"code": 500, "error": str(e)}
+
+
+# ==================== 2. SSE 流式对话接口 ====================
+@router.post("/chat/stream", summary="流式对话接口")
+@limiter.limit("30/minute")
+async def chat_stream(
+    request: Request,
+    request_body: ChatRequest,
+    db: Session = Depends(get_db),
+    auth: bool = Depends(verify_api_key)
+):
+    current_trace_id = set_trace()
+    session_id = request_body.session_id or str(uuid.uuid4())
+    
+    # 加载历史与记忆
+    messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
+    if not messages:
+        messages = [{"role": "system", "content": system_prompt}]
+        save_message(db, session_id, "system", system_prompt)
+
+    db_session = get_or_create_session(db, session_id)
+    memory_text = db_session.long_term_memory
+    if memory_text:
+        messages.insert(1, {"role": "system", "content": f"【用户长期记忆信息】\n{memory_text}\n\n以上是用户的长期固定信息，可以直接引用，无需重复询问用户。"})
+
+    # 意图判断
+    time_keywords = ["时间", "几点", "日期", "星期几", "今天几号", "现在什么时候"]
+    is_time_question = any(keyword in request_body.message for keyword in time_keywords)
+    calc_pattern = re.compile(r'计算|等于多少|算式|表达式|\d+\s*[+\-*/()]\s*\d+')
+    is_calc_question = bool(calc_pattern.search(request_body.message))
+    weather_keywords = ["天气", "温度", "下雨", "下雪", "冷", "热", "度", "风", "雾", "霾"]
+    is_weather_question = any(kw in request_body.message for kw in weather_keywords) or "呢" in request_body.message
+    
+    known_info = []
+    if is_weather_question and not is_time_question and not is_calc_question and session_id in WEATHER_CACHE:
+        for city_weather in WEATHER_CACHE[session_id].values():
+            known_info.append("已知信息：" + city_weather)
+    
+    user_content = request_body.message
+    if known_info:
+        user_content = "内部参考数据：\n" + "\n".join(known_info) + "\n\n用户问题：" + request_body.message + "\n\n要求：1. 参考数据直接使用。2. 省略问法默认查天气，直接调用工具。3. 绝对禁止复述参考数据，禁止提已知信息，禁止问是否重新查询，直接输出简洁结果。"
+
+    logger.info("【最终用户输入(流式)】\n" + user_content + "\n")
+    messages.append({"role": "user", "content": user_content})
+    save_message(db, session_id, "user", request_body.message)
+
+    async def event_generator():
+        try:
+            yield f"data: {json.dumps({'event': 'thinking', 'data': '正在思考...'})}\n\n"
+            await asyncio.sleep(0.1)
+            
+            input_len = len(messages)
+            result = agent_app.invoke({"messages": messages, "session_id": session_id, "retry_count": 0})
+            
+            final_messages = result["messages"]
+            final_answer = clean_weather_reply(clean_latex_text(final_messages[-1].content))
+            
+            thought_process = ""
+            step_list = []
+            step_index = 1
+            new_messages = final_messages[input_len:]
+            
+            for msg in new_messages:
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+                if role == "assistant":
+                    tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                    if tool_calls:
+                        for tc in tool_calls:
+                            func = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                            name = func.get("name") if isinstance(func, dict) else getattr(func, "name", "")
+                            args = func.get("arguments") if isinstance(func, dict) else getattr(func, "arguments", "{}")
+                            step_list.append(f"第{step_index}步 调用工具：{name}\n参数：{args}")
+                            step_index += 1
+                elif role == "tool":
+                    content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+                    step_list.append(f"第{step_index}步 返回结果：{content}")
+                    step_index += 1
+
+            if step_list:
+                thought_process = "【执行链路】\n" + "\n\n".join(step_list)
+                if "search_knowledge" in thought_process and "【来源文件:" in thought_process:
+                    sources = re.findall(r'【来源文件: (.*?)】', thought_process)
+                    if sources:
+                        unique_sources = list(dict.fromkeys(sources))
+                        source_str = "、".join(unique_sources)
+                        if "来源" not in final_answer:
+                            final_answer += f"\n\n(来源: {source_str})"
+            elif is_weather_question and known_info:
+                thought_process = "【执行链路】\n第1步 命中本地天气缓存\n第2步 直接读取缓存数据进行回答"
+
+            # 更新天气缓存
+            for msg in final_messages:
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+                name = msg.get("name") if isinstance(msg, dict) else getattr(msg, "name", "")
+                content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                if role == "tool" and name == "get_weather":
+                    city = content.split("天气：")[0]
+                    if session_id not in WEATHER_CACHE:
+                        WEATHER_CACHE[session_id] = {}
+                    WEATHER_CACHE[session_id][city] = content
+
+            save_message(db, session_id, "assistant", final_answer, thought_process)
+
+            # 1. 先极速流式推送思考过程
+            if thought_process:
+                yield f"data: {json.dumps({'event': 'thinking_start'}, ensure_ascii=False)}\n\n"
+                for char in thought_process:
+                    yield f"data: {json.dumps({'event': 'thinking', 'data': char}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.005)
+                yield f"data: {json.dumps({'event': 'thinking_done'}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.2)
+
+            # 2. 再慢速流式推送最终回答
+            for char in final_answer:
+                yield f"data: {json.dumps({'event': 'content', 'data': char}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.03)
+
+            # 3. 结束
+            yield f"data: {json.dumps({'event': 'done', 'trace_id': current_trace_id, 'session_id': session_id}, ensure_ascii=False)}\n\n"
+            
+        except Exception as e:
+            logger.error(f"流式接口异常：{str(e)}")
+            yield f"data: {json.dumps({'event': 'error', 'data': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ==================== 3. 多会话管理接口 ====================
+@router.get("/sessions", summary="获取所有会话列表")
+def get_sessions(db: Session = Depends(get_db)):
+    from app.db.models import DBSession
+    sessions = db.query(DBSession).order_by(DBSession.updated_at.desc()).all()
+    return {
+        "code": 200, 
+        "data": [
+            {"session_id": s.session_id, "updated_at": s.updated_at.strftime("%m-%d %H:%M")} 
+            for s in sessions
+        ]
+    }
+
+@router.get("/sessions/{session_id}/messages", summary="获取指定会话的历史消息")
+def get_session_messages(session_id: str, db: Session = Depends(get_db)):
+    from app.db.models import DBMessage
+    msgs = db.query(DBMessage).filter(
+        DBMessage.session_id == session_id,
+        DBMessage.role.in_(["user", "assistant"])
+    ).order_by(DBMessage.created_at.asc()).all()
+    
+    return {
+        "code": 200, 
+        "data": [
+            {
+                "role": m.role, 
+                "content": m.content, 
+                "thought_process": m.thought_process or ""
+            } 
+            for m in msgs
+        ]
+    }

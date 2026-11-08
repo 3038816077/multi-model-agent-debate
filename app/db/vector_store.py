@@ -2,7 +2,12 @@ import os
 import jieba
 import re
 from pypdf import PdfReader
-from app.core.config import RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP, RAG_RECALL_TOP_K, RAG_FINAL_TOP_K
+from app.core.config import (
+    RAG_CHUNK_SIZE, RAG_CHUNK_OVERLAP, RAG_RECALL_TOP_K, RAG_FINAL_TOP_K,
+    USE_SEMANTIC_CHUNKING, SEMANTIC_CHUNK_THRESHOLD # 👈 引入新增配置
+)
+# 👇 引入 Document 对象
+from langchain_core.documents import Document
 
 # 👇 1. 动态读取离线配置
 hf_offline = os.getenv("HF_HUB_OFFLINE", "0")
@@ -29,7 +34,6 @@ from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
-# 👇 引入 CrossEncoder 用于重排序
 from sentence_transformers import CrossEncoder
 
 from app.core.logger import logger
@@ -72,7 +76,8 @@ def init_knowledge_base(base_dir: str):
             try:
                 content = load_file_content(filepath)
                 if content.strip():
-                    docs.append(content)
+                    doc = Document(page_content=content, metadata={"source": filename})
+                    docs.append(doc)
             except Exception as e:
                 logger.error(f"读取文档 {filename} 失败: {str(e)}")
 
@@ -80,29 +85,45 @@ def init_knowledge_base(base_dir: str):
         logger.info("知识库目录为空，跳过向量库初始化")
         return
 
-    # 👇 配置化：文本切分参数
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=RAG_CHUNK_SIZE, 
-        chunk_overlap=RAG_CHUNK_OVERLAP, 
-        separators=["\n\n", "\n", "。", "；", " ", ""]
-    )
-    split_docs = splitter.create_documents(docs)
-
     is_offline = (hf_offline == "1")
     
-    # 1. 向量检索器
+    # 👇 提前加载向量模型（因为语义分块需要它，固定分块也需要它建库）
     logger.info(f"正在加载向量模型 (离线模式: {is_offline})...")
     embeddings = HuggingFaceEmbeddings(
         model_name="all-MiniLM-L6-v2",
         model_kwargs={"device": "cpu", "local_files_only": is_offline}
     )
+
+    # 👇 核心：根据配置选择分块策略
+    if USE_SEMANTIC_CHUNKING:
+        try:
+            from langchain_experimental.text_splitter import SemanticChunker
+            logger.info(f"【RAG】正在使用 语义分块 (Semantic) 策略，阈值: {SEMANTIC_CHUNK_THRESHOLD}...")
+            splitter = SemanticChunker(
+                embeddings=embeddings,
+                breakpoint_threshold_type="percentile",
+                breakpoint_threshold_amount=SEMANTIC_CHUNK_THRESHOLD * 100
+            )
+            split_docs = splitter.split_documents(docs)
+        except Exception as e:
+            logger.error(f"语义分块失败，自动降级为固定分块: {e}")
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=RAG_CHUNK_SIZE, chunk_overlap=RAG_CHUNK_OVERLAP, separators=["\n\n", "\n", "。", "；", " ", ""]
+            )
+            split_docs = splitter.split_documents(docs)
+    else:
+        logger.info("【RAG】正在使用 字符硬切 (Recursive) 策略...")
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=RAG_CHUNK_SIZE, chunk_overlap=RAG_CHUNK_OVERLAP, separators=["\n\n", "\n", "。", "；", " ", ""]
+        )
+        split_docs = splitter.split_documents(docs)
+
+    # 1. 向量检索器
     vector_db = FAISS.from_documents(split_docs, embeddings)
-    # 👇 配置化：粗排召回数量
     faiss_retriever = vector_db.as_retriever(search_kwargs={"k": RAG_RECALL_TOP_K})
 
     # 2. BM25 关键词检索器
     bm25_retriever = BM25Retriever.from_documents(split_docs, preprocess_func=_chinese_tokenizer)
-    # 👇 配置化：粗排召回数量
     bm25_retriever.k = RAG_RECALL_TOP_K
 
     # 3. RRF 融合检索器
@@ -111,25 +132,22 @@ def init_knowledge_base(base_dir: str):
         weights=[0.3, 0.7]
     )
 
-    # 4. 初始化 Rerank 重排序模型
-    logger.info(f"正在加载 Rerank 重排序模型 (首次运行会下载约1.1GB文件)...")
+    # 4. Rerank 重排序模型
+    logger.info(f"正在加载 Rerank 重排序模型...")
     try:
         RERANKER = CrossEncoder('BAAI/bge-reranker-base', max_length=512, local_files_only=is_offline)
         logger.info("Rerank 模型加载成功！")
     except Exception as e:
         logger.error(f"Rerank 模型加载失败，将退化为纯混合检索: {str(e)}")
 
-    logger.info(f"知识库初始化完成，共 {len(split_docs)} 个文本块，【混合检索+精排】已启用")
+    logger.info(f"知识库初始化完成，共 {len(split_docs)} 个文本块，【混合检索+精排+溯源】已启用")
 
-# 👇 配置化：最终返回数量
 def hybrid_search(query: str, top_k: int = RAG_FINAL_TOP_K):
-    """两阶段检索：粗排召回 + 精排重排序"""
+    # ... (这里的 hybrid_search 保持你刚才的代码完全不变) ...
     if not ENSEMBLE_RETRIEVER:
         return []
     try:
-        # 粗排：混合检索召回 Top N
         results = ENSEMBLE_RETRIEVER.invoke(query)
-        
         seen = set()
         unique_docs = []
         for doc in results:
@@ -137,17 +155,18 @@ def hybrid_search(query: str, top_k: int = RAG_FINAL_TOP_K):
                 seen.add(doc.page_content)
                 unique_docs.append(doc)
                 
-        # 精排：用 Cross-Encoder 重新打分
         if RERANKER and len(unique_docs) > 1:
             pairs = [[query, doc.page_content] for doc in unique_docs]
             scores = RERANKER.predict(pairs)
-            
-            # 按照分数从高到低排序
             scored_docs = list(zip(unique_docs, scores))
             scored_docs.sort(key=lambda x: x[1], reverse=True)
             unique_docs = [doc for doc, score in scored_docs]
             
-        final_results = [doc.page_content for doc in unique_docs[:top_k]]
+        final_results = []
+        for doc in unique_docs[:top_k]:
+            source = doc.metadata.get("source", "未知文档")
+            final_results.append(f"【来源文件: {source}】\n{doc.page_content}")
+            
         return final_results
     except Exception as e:
         logger.error(f"检索失败: {str(e)}")
