@@ -111,7 +111,8 @@
                     data.data.forEach(s => {
                         const div = document.createElement('div');
                         div.className = `session-item ${s.session_id === sessionId ? 'active' : ''}`;
-                        div.innerHTML = `<span>会话 ${s.session_id.slice(0, 6)}</span><span>${s.updated_at}</span>`;
+                        // 👇 核心修改：展示 title，并加入省略号样式
+                        div.innerHTML = `<span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; margin-right: 8px;" title="${s.title || '新会话'}">${s.title || '新会话'}</span><span style="font-size: 11px; color: #9ca3af; flex-shrink: 0;">${s.updated_at}</span>`;
                         div.onclick = () => switchSession(s.session_id);
                         sessionList.appendChild(div);
                     });
@@ -145,18 +146,15 @@
             }
         }
 
-        // 👇 核心修复点：把角色转换和渲染逻辑彻底修好
         function addMessage(content, role, thought = null) {
             const msgDiv = document.createElement('div');
-            // 把后端的 'assistant' 翻译成 CSS 样式用的 'ai'
-            const displayRole = (role === 'assistant') ? 'ai' : role; 
+            const displayRole = (role === 'assistant') ? 'ai' : role;
             msgDiv.className = `message ${displayRole}`;
             
             const textSpan = document.createElement('span');
             textSpan.textContent = content;
             msgDiv.appendChild(textSpan);
 
-            // 注意这里用 displayRole 判断
             if (thought && displayRole === 'ai') {
                 const toggle = document.createElement('div');
                 toggle.className = 'thought-toggle';

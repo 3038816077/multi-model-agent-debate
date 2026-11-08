@@ -342,15 +342,28 @@ async def chat_stream(
 # ==================== 3. 多会话管理接口 ====================
 @router.get("/sessions", summary="获取所有会话列表")
 def get_sessions(db: Session = Depends(get_db)):
-    from app.db.models import DBSession
+    from app.db.models import DBSession, DBMessage
     sessions = db.query(DBSession).order_by(DBSession.updated_at.desc()).all()
-    return {
-        "code": 200, 
-        "data": [
-            {"session_id": s.session_id, "updated_at": s.updated_at.strftime("%m-%d %H:%M")} 
-            for s in sessions
-        ]
-    }
+    
+    result = []
+    for s in sessions:
+        first_msg = db.query(DBMessage).filter(
+            DBMessage.session_id == s.session_id,
+            DBMessage.role == "user"
+        ).order_by(DBMessage.created_at.asc()).first()
+        
+        title = "新会话"
+        if first_msg and first_msg.content:
+            content_clean = first_msg.content.strip().replace("\n", " ")
+            title = content_clean[:15] + ("..." if len(content_clean) > 15 else "")
+            
+        result.append({
+            "session_id": s.session_id, 
+            "updated_at": s.updated_at.strftime("%m-%d %H:%M"),
+            "title": title
+        })
+        
+    return {"code": 200, "data": result}
 
 @router.get("/sessions/{session_id}/messages", summary="获取指定会话的历史消息")
 def get_session_messages(session_id: str, db: Session = Depends(get_db)):
