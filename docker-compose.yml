@@ -1,9 +1,9 @@
 
 
 services:
-  agent-demo:
+  agent:
     build: .
-    container_name: multi-tool-agent
+    container_name: multi-model-agent-debate
     ports:
       - "8000:8000"
     env_file:

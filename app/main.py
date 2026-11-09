@@ -26,7 +26,7 @@ if not os.path.exists(STATIC_DIR):
     os.mkdir(STATIC_DIR)
 
 # 4. 初始化 FastAPI
-app = FastAPI(title="智能助手Agent服务")
+app = FastAPI(title="多模型研讨 Agent 服务")
 
 # 5. 注册限流器
 app.state.limiter = limiter

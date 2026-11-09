@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>多工具智能助手 Agent</title>
+    <title>多模型研讨 Agent</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -101,7 +101,7 @@
         <div class="chat-container">
             <div class="chat-header">
                 <div>
-                    <div class="title" id="chatTitle">智能助手 · 多工具 Agent</div>
+                    <div class="title" id="chatTitle">多模型研讨 Agent</div>
                     <div class="subtitle" id="chatSubtitle">基于 LangGraph + ReAct | 深度流式输出</div>
                 </div>
                 <button class="settings-btn" onclick="openSettings()">⚙️ 自定义配置</button>
@@ -379,7 +379,7 @@
                     inputWrapper.style.display = 'none';
                 }
             } else {
-                chatTitle.textContent = "智能助手 · 多工具 Agent";
+                chatTitle.textContent = "多模型研讨 Agent";
                 chatSubtitle.textContent = "基于 LangGraph + ReAct | 深度流式输出";
                 quickBtns.style.display = 'flex';
                 modelSelectWrapper.style.display = 'flex';

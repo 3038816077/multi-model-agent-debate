@@ -1,10 +1,11 @@
 
-# 🤖 多工具智能助手 Agent (Hybrid RAG + LangGraph)
+# 🤖 多模型研讨 Agent（Multi-Model Debate + Hybrid RAG + LangGraph）
 
-基于 **LangGraph + FastAPI + SQLite + FAISS** 从零搭建的企业级多工具智能体。项目完整实现了 ReAct 闭环、**Query改写+两阶段混合检索（粗排+精排）**、**多工具线程池并发调度**、**全链路 Trace ID 追踪**、**SSE 双通道流式输出**、ChatGPT 同款多会话管理，并深度集成了**无状态多模型透传、联网搜索、接口鉴权与工具错误自愈机制**。支持 Docker 多阶段构建与一键容器化交付。
+基于 **LangGraph + FastAPI + SQLite + FAISS** 从零搭建的企业级多模型研讨智能体。项目完整实现了**多模型研讨（专家独立作答 → 交叉研讨 → 首席总结）**、ReAct 闭环、**Query改写+两阶段混合检索（粗排+精排）**、**多工具线程池并发调度**、**全链路 Trace ID 追踪**、**SSE 双通道流式输出**、ChatGPT 同款多会话管理，并深度集成了**无状态多模型透传、联网搜索、接口鉴权与工具错误自愈机制**。支持 Docker 多阶段构建与一键容器化交付。
 
 ## ✨ 核心工程亮点
 
+- 🗣️ **多模型研讨（Multi-Model Debate）**：同一问题由多个不同厂商的模型并行作答，再让它们互相阅读彼此观点做交叉研讨，最后由首席模型汇总成一份结论。支持任意增删主/副模型，三个阶段的产出按轮次分块独立渲染（不会互相覆盖），研讨会话与单模型会话一样落库、出现在左侧历史记录中，聊天框顶部实时显示本轮的主模型与副模型。
 - 🧠 **意图前置路由与防死循环**：设计正则匹配的 Intent Router，对时间/计算等确定性场景进行后端兜底隔离；在 LLM 节点动态判断 `tool_choice`（首次 `required` 强控，二次 `auto` 恢复），彻底解决大模型“幻觉不调工具”与“工具无限死循环”的痛点。
 - ⚡ **多工具线程池并发调度**：针对工具调用属于 IO 密集型任务的特点，在 `tool_node` 中引入 `ThreadPoolExecutor`。当大模型一次性发起多个 Function Calling 时，系统并发请求第三方接口，多任务总耗时缩短 60% 以上，并通过 Future 机制保证上下文顺序绝对保真。
 - 🔍 **三阶段全链路 RAG 优化**：
@@ -37,7 +38,7 @@
 ## 📁 项目结构
 
 ```text
-agent-demo/
+multi-model-agent-debate/
 ├── app/
 │   ├── api/          # 路由层：鉴权、意图拦截、流式/同步接口、多会话查询
 │   ├── agent/        # 核心层：LangGraph 状态机、LLM 节点、并发 Tool 节点
@@ -98,7 +99,7 @@ python run.py
 
 ## ⚠️ 网络异常无法下载模型怎么办？（离线兜底方案）
 由于国内网络访问 HuggingFace 官方受限，如果你在首次启动时卡在 `正在加载向量模型`，请直接使用我们提供的离线模型包：
-1. 点击去 **[Releases](https://github.com/3038816077/multi-tool-agent-demo/releases/tag/v1.0.0)** 页面下载 `all-MiniLM-L6-v2.zip`。
+1. 点击去 **[Releases](https://github.com/3038816077/multi-model-agent-debate/releases/tag/v1.0.0)** 页面下载 `all-MiniLM-L6-v2.zip`。
 2. 将压缩包解压，把里面的 `hub` 文件夹放到你的电脑缓存目录：
    - Windows: `C:\Users\你的用户名\.cache\huggingface\`
    - Mac/Linux: `~/.cache/huggingface/`
