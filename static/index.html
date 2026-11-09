@@ -20,13 +20,19 @@ html, body { height: 100%; }
 body {
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
     color: var(--ink);
-    background:
-        radial-gradient(900px 520px at 8% -12%, #e0e7ff 0%, transparent 58%),
-        radial-gradient(820px 480px at 102% -6%, #ede9fe 0%, transparent 55%),
-        linear-gradient(180deg, #f5f7fc 0%, #eef1f8 100%);
-    height: 100vh; display: flex; justify-content: center; align-items: center;
+    padding: 22px;
+    background: linear-gradient(155deg, #e8ecfb 0%, #eef1fb 38%, #f4effc 68%, #fdf0f7 100%);
+    height: 100%; display: flex; justify-content: center; align-items: center;
+    position: relative; overflow: hidden;
     -webkit-font-smoothing: antialiased;
 }
+/* 背景光斑：纯装饰，不影响点击 */
+body::before, body::after {
+    content: ''; position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
+    filter: blur(90px); opacity: .75;
+}
+body::before { width: 560px; height: 560px; left: -160px; top: -180px; background: #c7d2fe; }
+body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; background: #e9d5ff; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #dbe2ee; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
@@ -34,9 +40,14 @@ body {
 
 /* ---------- 外壳 ---------- */
 .app-container {
-    width: 100%; max-width: 1180px; height: 92vh; display: flex; position: relative;
-    background: var(--surface); border-radius: 20px; overflow: hidden;
-    box-shadow: var(--shadow-lg), 0 0 0 1px rgba(15, 23, 42, .04);
+    width: 100%; max-width: 1180px; height: 100%; max-height: 1020px; display: flex;
+    position: relative; z-index: 1;
+    background: var(--surface); border-radius: 22px; overflow: hidden;
+    box-shadow:
+        0 40px 90px -40px rgba(49, 46, 129, .45),
+        0 8px 26px -18px rgba(15, 23, 42, .28),
+        0 0 0 1px rgba(99, 102, 241, .10),
+        inset 0 1px 0 rgba(255, 255, 255, .9);
 }
 
 /* ---------- 侧边栏 ---------- */
@@ -85,7 +96,7 @@ body {
 .chat-container { flex: 1; min-width: 0; background: var(--surface); display: flex; flex-direction: column; overflow: hidden; position: relative; }
 .chat-header {
     padding: 18px 28px; display: flex; justify-content: space-between; align-items: center; gap: 16px;
-    background: rgba(255, 255, 255, .86); backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, .78); backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line); flex-shrink: 0;
 }
 .chat-header .title {
@@ -124,7 +135,12 @@ body {
 .quick-btn:active { transform: translateY(0); }
 
 /* ---------- 消息区 ---------- */
-.chat-messages { flex: 1; padding: 26px 28px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+.chat-messages {
+    flex: 1; padding: 26px 28px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+    background:
+        radial-gradient(700px 320px at 100% 0%, rgba(224, 231, 255, .55) 0%, transparent 65%),
+        linear-gradient(180deg, #fbfcff 0%, #f6f8fd 100%);
+}
 .chat-messages:empty::before {
     content: "👋 选个模型，或者点上面的快捷问题，开始和 Agent 对话吧";
     margin: auto; padding: 0 24px; color: var(--muted-2); font-size: 13.5px; text-align: center; line-height: 1.9;
@@ -306,13 +322,16 @@ body {
 
 /* ---------- 窄屏 ---------- */
 @media (max-width: 900px) {
-    .app-container { max-width: none; height: 100vh; border-radius: 0; }
+    body { padding: 12px; }
+    .app-container { max-width: none; border-radius: 16px; }
     .sidebar { width: 208px; }
     .chat-header, .quick-btns, .input-wrapper, .group-info-bar { padding-left: 18px; padding-right: 18px; }
     .chat-messages { padding: 18px 18px; }
     .message { max-width: 86%; }
 }
 @media (max-width: 680px) {
+    body { padding: 0; }
+    .app-container { border-radius: 0; max-height: none; }
     .sidebar { display: none; }
 }
     </style>
