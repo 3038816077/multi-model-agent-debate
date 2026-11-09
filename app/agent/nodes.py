@@ -3,7 +3,7 @@ import concurrent.futures
 from app.core.logger import logger, get_trace, set_trace
 from app.tools.registry import TOOL_SCHEMAS, execute_tool
 from app.agent.state import State
-from app.core.llm_factory import get_llm_client, get_model_name, get_llm_context, set_llm_context
+from app.core.llm_factory import get_llm_client, get_model_name, get_llm_context, set_llm_context, friendly_llm_error
 
 def llm_node(state: State):
     messages = state["messages"]
@@ -19,12 +19,16 @@ def llm_node(state: State):
             tool_choice = "required"
             logger.info("[路由控制] 检测到首次天气查询，强制模型调用工具...")
 
-    resp = get_llm_client().chat.completions.create(
-        model=get_model_name(), 
-        messages=messages, 
-        tools=TOOL_SCHEMAS, 
-        tool_choice=tool_choice
-    )
+    try:
+        resp = get_llm_client().chat.completions.create(
+            model=get_model_name(),
+            messages=messages,
+            tools=TOOL_SCHEMAS,
+            tool_choice=tool_choice
+        )
+    except Exception as e:
+        # 抛出中文可读的原因，前端【服务异常：...】里能直接看到该改什么
+        raise RuntimeError(friendly_llm_error(e, get_model_name())) from e
     msg = resp.choices[0].message
     logger.info(f"[LLM返回] 内容: {msg.content}, 工具调用: {msg.tool_calls}")
     return {"messages": messages + [msg]}

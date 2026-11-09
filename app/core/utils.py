@@ -52,9 +52,22 @@ def extract_long_term_memory(messages: list, existing_memory: str = "") -> str:
     if not dialog_text:
         return existing_memory
     
+    # 火山方舟的 seed-2-1-pro 是「深度思考」模型：这种"提炼要点"的任务它会一直推理，
+    # 实测不开 thinking=disabled 时 25s 都不返回（主对话不受影响，只有这类总结会卡）。
+    # 只对方舟域名加这个参数，别的厂商不认这个字段。
+    extra = {}
+    try:
+        if "volces.com" in str(get_llm_client().base_url):
+            extra["extra_body"] = {"thinking": {"type": "disabled"}}
+    except Exception:
+        pass
+
     resp = get_llm_client().chat.completions.create(
-        model=get_model_name(), 
-        messages=[{"role": "user", "content": prompt.format(old_memory=existing_memory, dialog=dialog_text)}]
+        model=get_model_name(),
+        messages=[{"role": "user", "content": prompt.format(old_memory=existing_memory, dialog=dialog_text)}],
+        max_tokens=256,   # 记忆只要要点，别让模型自由发挥拖慢整体
+        timeout=20,
+        **extra
     )
     new_memory = resp.choices[0].message.content.strip()
     return new_memory if new_memory != "空" else existing_memory

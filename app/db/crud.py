@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from sqlalchemy.orm import Session
 from app.db.models import DBSession, DBMessage
 
@@ -16,7 +17,14 @@ def get_messages(db: Session, session_id: str, limit: int = 20) -> list:
             
     return [{"role": m.role, "content": m.content} for m in msgs]
 def save_message(db: Session, session_id: str, role: str, content: str, thought_process: str = ""):
-    """保存单条消息"""
+    """保存单条消息。
+
+    顺便保证 sessions 表里有这条会话的记录：/sessions 列表是查 sessions 表的，
+    以前只有 update_long_term_memory 才会建这条记录，所以多模型研讨聊完
+    左侧历史里根本看不到（用户反馈的“没加入普通会话”就是这个原因）。
+    """
+    sess = get_or_create_session(db, session_id)
+    sess.updated_at = datetime.now()   # 让会话按最后活跃时间排序
     msg = DBMessage(
         id=str(uuid.uuid4()), 
         session_id=session_id, 

@@ -59,6 +59,27 @@ agent-demo/
 复制根目录的 `env.txt` 并重命名为 `.env`，填入你的大模型与天气 API Key。
 *(注：可在 `.env` 中配置 `API_KEY` 开启鉴权；首次启动保持 `HF_HUB_OFFLINE=0` 联网下载模型)*
 
+### 1.1 如何新增一个模型（以豆包为例）
+
+所有内置模型都来自 `.env` 里的 `MODEL_REGISTRY`（一段单行 JSON），**加模型不需要改后端代码**：
+
+```json
+"doubao-seed-2-1-pro":{
+  "base_url":"https://ark.cn-beijing.volces.com/api/v3",
+  "api_key":"你的火山方舟 ARK_API_KEY",
+  "vendor":"字节跳动",
+  "label":"豆包 Seed 2.1 Pro",
+  "model":"ep-20250101xxxxxx-xxxxx"
+}
+```
+
+把这段追加到 `MODEL_REGISTRY` 的 JSON 里即可（注意逗号），重启后下拉框、多模型研讨都会自动出现。
+
+- `model` 字段可选，表示**真正发给厂商的模型名**：注册表里的 key 可以起一个干净好读的名字（如上例的 `doubao-seed-2-1-pro`），真实模型 ID 放在 `model` 里。
+  不写这个字段时，key 会直接当作模型名发给厂商（qwen / glm / deepseek / kimi 都是这样）。
+- 豆包的 `model` 也可以直接填模型 ID（如 `doubao-seed-2-1-pro-260915`），以方舟控制台为准。
+- 想让它默认被选中：把 `static/index.html` 里的 `DEFAULT_MODEL_ID` 改成你的模型 key。
+
 ### 2. 方式一：Docker 部署（强烈推荐）
 在项目根目录执行：
 ```bash
