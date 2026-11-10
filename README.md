@@ -1,69 +1,113 @@
+<div align="center">
 
-# 🤖 多模型研讨 Agent（Multi-Model Debate + Hybrid RAG + LangGraph）
+# Multi-Model Agent Debate
 
-基于 **LangGraph + FastAPI + SQLite + FAISS** 从零搭建的企业级多模型研讨智能体。项目完整实现了**多模型研讨（专家独立作答 → 交叉研讨 → 首席总结）**、ReAct 闭环、**Query改写+两阶段混合检索（粗排+精排）**、**多工具线程池并发调度**、**全链路 Trace ID 追踪**、**SSE 双通道流式输出**、ChatGPT 同款多会话管理，并深度集成了**无状态多模型透传、联网搜索、接口鉴权与工具错误自愈机制**。支持 Docker 多阶段构建与一键容器化交付。
+### 让多个大模型先各自作答，再互相挑错，最后由首席模型总结
 
-## ✨ 核心工程亮点
+一套开箱即用的**多模型研讨 Agent**：LangGraph 编排 · Hybrid RAG 检索（BM25 + FAISS + 精排）· Word / PDF 直接问答 · SSE 流式输出 · 多会话持久化
 
-- 🗣️ **多模型研讨（Multi-Model Debate）**：同一问题由多个不同厂商的模型并行作答，再让它们互相阅读彼此观点做交叉研讨，最后由首席模型汇总成一份结论。支持任意增删主/副模型，三个阶段的产出按轮次分块独立渲染（不会互相覆盖），研讨会话与单模型会话一样落库、出现在左侧历史记录中，聊天框顶部实时显示本轮的主模型与副模型。
-- 🧠 **意图前置路由与防死循环**：设计正则匹配的 Intent Router，对时间/计算等确定性场景进行后端兜底隔离；在 LLM 节点动态判断 `tool_choice`（首次 `required` 强控，二次 `auto` 恢复），彻底解决大模型“幻觉不调工具”与“工具无限死循环”的痛点。
-- ⚡ **多工具线程池并发调度**：针对工具调用属于 IO 密集型任务的特点，在 `tool_node` 中引入 `ThreadPoolExecutor`。当大模型一次性发起多个 Function Calling 时，系统并发请求第三方接口，多任务总耗时缩短 60% 以上，并通过 Future 机制保证上下文顺序绝对保真。
-- 🔍 **三阶段全链路 RAG 优化**：
-  - **查询改写（Query Rewrite）**：检索前由大模型将用户口语化提问提炼为高密度搜索关键词，打通表达鸿沟。
-  - **混合粗排**：基于 **BM25 + FAISS 双路召回 + RRF 融合算法**，解决专有名词召回率低的问题。
-  - **精排降噪（Rerank）**：引入轻量级 **Cross-Encoder (BAAI/bge-reranker-base)** 对粗排 Top10 进行深度交互打分，最终提纯 Top3 上下文，防范大模型“中间迷失”。
-- 📄 **文档问答（Word / PDF 直接读）**：前端一键上传 `.docx` / `.pdf` / `.txt`，后端提取正文后注入上下文，可直接对合同、手册、论文提问；**单模型会话与多模型研讨都支持**——研讨时文档会同时进入专家首轮作答、交叉研讨、首席总结三个阶段。Word 用标准库解析（docx 本质是 zip + XML，**不额外引入依赖**，表格按 `单元格 | 单元格` 还原），PDF 用 `pypdf` 逐页抽取并标注页码；单文件上限 15MB / 20 万字，超长自动截断并明确告知模型，避免它编造文档里没有的内容。
-- 🔐 **无状态自定义大模型透传**：支持用户在前端输入自己的 API Key 切换不同大模型（通义千问/智谱/DeepSeek/豆包/GPT/Claude 等）。后端基于 `contextvars` 实现请求级上下文隔离，密钥随请求传入，用完即焚，服务端零存储；配合接口白名单防范 SSRF，全链路日志强制脱敏，安全性极高。
-- 🌐 **联网搜索开关与兜底**：集成博查（Bocha）联网搜索 API。前端提供“强制联网”开关，开启后后端通过 Prompt 注入强控模型调用 `search_web` 工具；同时支持智能自主联网（如询问实时新闻时），保证最新资讯的获取。
-- 🛡️ **安全防护与错误自愈**：新增 **API Key 接口鉴权**与基于 `slowapi` 的**单 IP 限流**；在工具节点设计了**精准前缀匹配的异常自愈机制**，当接口超时或参数错误时，回流 Error 日志引导大模型自主修正参数重试（最多2次），大幅提升任务成功率。
-- 📊 **全链路 Trace ID 追踪**：基于 Python `contextvars` 与自定义 `logging.Formatter`，实现从接口入口、Agent 节点、并发工具到第三方库的全链路日志追踪（完美解决线程池上下文丢失问题），大幅提升线上排障效率。
-- 💻 **极致的双通道 SSE 流式体验**：
-  - 基于 `StreamingResponse` 与前端 `ReadableStream`，实现“先极速流式打印思考过程，再平滑打字机输出最终回答”的极致体验。
-  - 引入 `AbortController` 支持前端一键“停止生成”，实时掐断后端流，节约 Token 消耗。
-- 💾 **持久化与会话管理**：摒弃内存字典，引入 SQLAlchemy + SQLite（开启 WAL 模式支持高并发读写）实现对话状态持久化；配合三级记忆架构（短期+摘要+长期），实现服务重启及多进程环境下的跨会话状态无缝恢复。
-- 🔒 **并发安全与防踩踏**：废弃全局状态字典，基于 LangGraph State 的 `input_len` 增量截取 `final_messages`，实现并发请求下执行链路（思考过程）的无状态提取，彻底解决上下文污染与数据错乱。
-- 🏗️ **DDD 分层与配置化解耦**：采用标准领域分层架构（`api` / `agent` / `core` / `db` / `middleware` / `tools`）。核心参数全部抽离至 `.env` 配置；支持 Docker **多阶段构建**减小镜像体积，并利用数据卷挂载一键部署。
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-1c3c3c)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 
-## 🛠️ 技术栈
+<sub><a href="#-快速开始">快速开始</a> · <a href="#-工作原理">工作原理</a> · <a href="#-功能一览">功能</a> · <a href="#-配置模型不用改代码">配置模型</a> · <a href="#-常见问题">常见问题</a> · <a href="#english">English</a></sub>
 
-- **核心框架**：FastAPI + Uvicorn + SQLAlchemy
-- **Agent 编排**：LangGraph (StateGraph) + ReAct 范式 + ThreadPoolExecutor 并发
-- **大语言模型**：Qwen-Plus / GLM-4 / DeepSeek / Kimi (OpenAI 兼容协议)
-- **检索增强 (RAG)**：FAISS + BM25 + Jieba + HuggingFace Embedding + BAAI/bge-reranker 精排
-- **联网搜索**：Bocha AI Web Search API
-- **安全防护**：SlowAPI (限流) + 自定义 API Key 鉴权
-- **数据库**：SQLite (WAL 模式持久化) + 内存缓存 (天气/高频工具)
-- **前端交互**：原生 HTML/JS + SSE 流式渲染 + localStorage 多模型配置
-- **部署运维**：Docker + Docker Compose
+</div>
 
-## 📁 项目结构
+---
+
+<!-- 📸 有截图之后：把图片存成 docs/preview.png，再删掉下面两行的注释符即可
+![界面预览](docs/preview.png)
+-->
+
+## 💡 为什么不是"再问一遍同一个模型"
+
+让一个模型检查自己的答案，效果很有限——**它很难推翻自己**。同一个模型、同一套权重、同一批偏见，复查十遍也是同一个盲区。
+
+这个项目换了个思路：
+
+> 让 GPT、Claude、Qwen、DeepSeek **同时回答**同一个问题，然后让它们**互相阅读对方的答案并挑错**，最后由一个首席模型汇总。
+
+不同厂商、不同训练数据带来的分歧，恰好是最有价值的部分——分歧出现的地方，往往就是原答案最不可靠的地方。
 
 ```text
-multi-model-agent-debate/
-├── app/
-│   ├── api/          # 路由层：鉴权、意图拦截、流式/同步接口、多会话查询
-│   ├── agent/        # 核心层：LangGraph 状态机、LLM 节点、并发 Tool 节点
-│   ├── core/         # 基础层：全局配置、Trace 日志、文本清洗、LLM 工厂
-│   ├── db/           # 数据层：SQLite 模型、CRUD、向量库 (FAISS+BM25+精排) 
-│   ├── middleware/   # 中间件层：API Key 鉴权与 IP 限流器
-│   └── tools/        # 工具层：天气、计算、时间、RAG检索、联网搜索
-├── knowledge/        # 本地知识库目录 (支持 .txt/.md/.pdf)
-├── static/           # 前端交互页面 (支持多会话与流式打字机)
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-└── run.py            # 启动入口
+用户提问
+   ├─ 第一轮：N 个专家模型并行独立作答（互不可见）
+   ├─ 第二轮：每个专家读到其他专家的观点，补充或反驳
+   └─ 第三轮：首席模型去伪存真，输出一份最终结论
 ```
 
-## 🚀 快速启动
+## 🔬 工作原理
 
-### 1. 配置环境变量
-复制根目录的 `env.txt` 并重命名为 `.env`，填入你的大模型与天气 API Key。
-*(注：可在 `.env` 中配置 `API_KEY` 开启鉴权；首次启动保持 `HF_HUB_OFFLINE=0` 联网下载模型)*
+![工作流程](docs/debate-flow.svg)
 
-### 1.1 如何新增一个模型（以豆包为例）
+| 阶段 | 做什么 | 关键点 |
+| --- | --- | --- |
+| 第一轮 · 独立作答 | 所有副模型并行回答，彼此看不到对方 | 保证观点的**独立性**，避免互相抄 |
+| 第二轮 · 交叉研讨 | 每个模型读到其他模型的答案，指出漏洞或补充 | 暴露单模型的**认知盲区** |
+| 第三轮 · 首席总结 | 主模型综合所有观点，剔除错误信息 | 输出**一份**结构化的最终结论 |
 
-所有内置模型都来自 `.env` 里的 `MODEL_REGISTRY`（一段单行 JSON），**加模型不需要改后端代码**：
+三个阶段的内容按轮次分块独立渲染，**后一轮不会顶掉前一轮**；整个研讨过程通过 SSE 实时推送到浏览器，刷新页面后从数据库完整还原（专家头像、模型名、每轮气泡都在）。
+
+## ✨ 功能一览
+
+| | 能力 | 说明 |
+| --- | --- | --- |
+| 🗣️ | **多模型研讨** | 主模型 + 任意数量副模型，三阶段交叉验证，可随时更换阵容 |
+| 📄 | **文档问答** | 前端直接上传 `.docx` / `.pdf` / `.txt`，Word 用标准库解析（不额外装依赖），PDF 逐页抽取并标注页码；**单模型和研讨模式都支持** |
+| 🔍 | **三阶段 RAG** | Query 改写 → BM25 + FAISS 双路召回 → Cross-Encoder 精排，专治专有名词检索不到 |
+| ⚡ | **并发工具调用** | 一次问"北京、上海、厦门天气"，`ThreadPoolExecutor` 并发请求三个接口 |
+| 🧠 | **意图前置路由** | 时间/计算等确定性场景走后端兜底，不依赖模型自觉调工具 |
+| 🌐 | **联网搜索** | 集成博查搜索，可强制开启，也可由模型自主判断是否联网 |
+| 🔐 | **无状态多模型透传** | 前端填自己的 API Key 即可切换厂商，`contextvars` 请求级隔离，服务端零存储 |
+| 💻 | **SSE 流式体验** | 思考链路 + 最终回答双通道打字机输出，支持实时中断 |
+| 📊 | **全链路 Trace** | 每个请求一个 Trace ID，线程池里的日志也不会丢 |
+| 🛡️ | **鉴权与限流** | API Key 校验 + SlowAPI 单 IP 限流 + 工具错误自愈重试 |
+
+内置 10 个模型可直接使用：通义千问、DeepSeek、智谱 GLM、Kimi、豆包 Seed、GPT-5.6、GPT-6、GPT-6.1、Claude Sonnet 4.6、Claude Opus 4.6。
+
+## 🚀 快速开始
+
+### 1. 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 配置密钥
+
+把根目录的 `env.txt` 复制成 `.env`，把里面 `sk-REPLACE_ME` 换成你自己的 Key。**只想先跑起来的话，配一个模型就够了**：
+
+```env
+MODEL_REGISTRY={"qwen-plus":{"base_url":"https://dashscope.aliyuncs.com/compatible-mode/v1","api_key":"sk-你的key","vendor":"阿里","label":"通义千问 Plus"}}
+DEFAULT_MODEL_ID=qwen-plus
+API_KEY=my-secret-key-123
+```
+
+### 3. 启动
+
+```bash
+python run.py
+```
+
+或者用 Docker（多阶段构建，一条命令）：
+
+```bash
+docker compose up -d --build
+```
+
+### 4. 打开页面
+
+- 前端：<http://127.0.0.1:8000>
+- 接口文档：<http://127.0.0.1:8000/docs>
+
+> 首次启动会下载 Embedding 和 Reranker 模型（约 400MB），需要几分钟；之后是秒级冷启动。
+
+## 🔌 配置模型（不用改代码）
+
+所有模型都来自 `.env` 里的 `MODEL_REGISTRY`——**一段单行 JSON**。想加一个模型，往里追加一段就行：
 
 ```json
 "doubao-seed-2-1-lite":{
@@ -76,47 +120,117 @@ multi-model-agent-debate/
 }
 ```
 
-把这段追加到 `MODEL_REGISTRY` 的 JSON 里即可（注意逗号），重启后下拉框、多模型研讨都会自动出现。
+重启后，下拉框和多模型研讨的模型列表里就会自动出现，**不需要改任何后端代码**。
 
-- `model` 字段可选，表示**真正发给厂商的模型名**：注册表里的 key 可以起一个干净好读的名字（如上例的 `doubao-seed-2-1-lite`），真实模型 ID 放在 `model` 里。
-  不写这个字段时，key 会直接当作模型名发给厂商（qwen / glm / deepseek / kimi 都是这样）。
-- 豆包的 `model` 也可以直接填模型 ID（如 `doubao-seed-2-1-lite-260915`），以方舟控制台为准。
-- `extra_body` 可选，会原样追加到请求体里。豆包 Seed 2.1 系列默认开启**深度思考**，一次简单问答要 20~60 秒，經常直接超时；
-  按上面的写法关掉之后，同样的请求 1~2 秒就返回，工具调用和流式输出都正常。
-- 想让它默认被选中：把 `static/index.html` 里的 `DEFAULT_MODEL_ID` 改成你的模型 key。
-- 想让它默认被选中：把 `static/index.html` 里的 `DEFAULT_MODEL_ID` 改成你的模型 key。
+- `model`（可选）：真正发给厂商的模型 ID。不写的话，registry 里的 key 会直接当模型名用。
+- `extra_body`（可选）：原样追加到请求体。上面的例子里，豆包 Seed 2.1 默认开启**深度思考**，一次简单问答要 20~60 秒甚至直接超时；关掉之后同样的问题 1~2 秒返回。
+- 想让它默认被选中：改 `static/index.html` 里的 `DEFAULT_MODEL_ID`。
 
-### 2. 方式一：Docker 部署（强烈推荐）
-在项目根目录执行：
-```bash
-docker compose up -d --build
+只要厂商兼容 OpenAI 协议（`/chat/completions` + `tools`），就能接进来——OpenAI、Anthropic 中转、DeepSeek、Kimi、智谱、通义、火山方舟都验证过。
+
+<details>
+<summary><b>🛠 技术栈</b></summary>
+
+- **核心框架**：FastAPI + Uvicorn + SQLAlchemy
+- **Agent 编排**：LangGraph (StateGraph) + ReAct + ThreadPoolExecutor 并发
+- **RAG**：FAISS + BM25 + Jieba + HuggingFace Embedding + BAAI/bge-reranker 精排
+- **联网搜索**：Bocha AI Web Search API
+- **安全**：SlowAPI 限流 + 自定义 API Key 鉴权 + SSRF 白名单
+- **存储**：SQLite（WAL 模式）+ 内存缓存
+- **前端**：原生 HTML/JS + SSE 流式渲染，零构建步骤
+- **部署**：Docker 多阶段构建 + Docker Compose
+
+</details>
+
+<details>
+<summary><b>📁 项目结构</b></summary>
+
+```text
+multi-model-agent-debate/
+├── app/
+│   ├── api/          # 路由层：鉴权、意图拦截、流式接口、多会话查询
+│   ├── agent/        # 核心层：LangGraph 状态机、LLM 节点、并发 Tool 节点
+│   ├── core/         # 基础层：配置、Trace 日志、LLM 工厂、错误翻译
+│   ├── db/           # 数据层：SQLite 模型、CRUD、向量库（FAISS + BM25 + 精排）
+│   ├── middleware/   # 中间件：API Key 鉴权与 IP 限流
+│   └── tools/        # 工具层：天气、计算、时间、RAG 检索、联网搜索、文档解析
+├── knowledge/        # 本地知识库（.txt / .md / .pdf）
+├── static/           # 前端页面（多会话 + 流式打字机 + 文档上传）
+├── docs/             # README 用的图
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+└── run.py            # 启动入口
 ```
 
-### 3. 方式二：本地 Python 运行
+</details>
+
+<details>
+<summary><b>🧩 几个值得一看的实现细节</b></summary>
+
+**意图前置路由**：时间、计算这类确定性场景，先用正则拦截并直接调用后端工具，不让模型去猜"该不该调工具"；同时在 LLM 节点动态切换 `tool_choice`（首次 `required` 强制，二次 `auto` 放开），既解决"幻觉不调工具"，也解决"工具无限死循环"。
+
+**两阶段混合检索**：Query 改写把口语化提问压成检索关键词 → BM25 + FAISS 双路召回 → RRF 融合 → Cross-Encoder 对 Top10 精排 → 取 Top3 送进上下文，专门对付专有名词召回率低和"中间迷失"。
+
+**工具错误自愈**：工具抛错时不直接失败，而是把错误信息回流给模型，引导它修正参数重试（最多 2 次）。
+
+**并发下的上下文**：`contextvars` 存 Trace ID 和 LLM 客户端，线程池里再包一层上下文传递，保证并发调用时日志和密钥不会串。
+
+</details>
+
+<details>
+<summary><b>⚠️ 下载模型卡住怎么办（国内网络）</b></summary>
+
+首次启动会从 HuggingFace 拉取 `all-MiniLM-L6-v2` 和 `bge-reranker-base`。如果卡在"正在加载向量模型"，用镜像：
+
+```env
+HF_ENDPOINT=https://hf-mirror.com
+```
+
+已经下载过的话，直接离线运行：
+
+```env
+HF_HUB_OFFLINE=1
+```
+
+</details>
+
+## ❓ 常见问题
+
+**Q：豆包/思考类模型很慢，老是超时？**
+在 registry 里加 `"extra_body":{"thinking":{"type":"disabled"}}` 关掉深度思考，或者把 `.env` 里的 `LLM_TIMEOUT` 调大（默认 60 秒）。
+
+**Q：研讨模式点了没反应 / 历史记录里只剩一段文字？**
+研讨过程会逐条写库（每条发言单独一行），刷新或切换会话都能还原成专家气泡。**这次改动之前产生的旧会话仍是拼接文本**，属于历史数据格式差异。
+
+**Q：`python-multipart` 装不上，上传功能还能用吗？**
+能。文档上传走的是 base64 JSON 通道，不依赖 `python-multipart`。
+
+**Q：能不能只用本地模型？**
+只要它兼容 OpenAI 协议（vLLM、Ollama、LM Studio 都行），在 registry 里把 `base_url` 指过去即可。
+
+## 📄 License
+
+[MIT](LICENSE) © 2026
+
+---
+
+<a id="english"></a>
+
+## English
+
+**Multi-Model Agent Debate** — a LangGraph + FastAPI agent where several LLMs answer independently, cross-review each other's answers, and a chief model synthesizes the final response.
+
+- 🗣️ Debate mode: Round 1 independent answers → Round 2 cross-critique → Round 3 chief summary
+- 📄 Ask questions about your `.docx` / `.pdf` (works in both single-model and debate mode)
+- 🔍 Hybrid RAG: query rewrite → BM25 + FAISS → Cross-Encoder rerank
+- ⚡ Parallel tool calling, SSE streaming, multi-session persistence
+- 🔌 Add any OpenAI-compatible model by editing one JSON line — no code changes
+
 ```bash
+cp env.txt .env   # fill in your API keys
 pip install -r requirements.txt
-python run.py
+python run.py     # http://127.0.0.1:8000
 ```
 
-### 4. 访问页面
-- **前端页面**：[http://127.0.0.1:8000](http://127.0.0.1:8000)
-- **接口文档**：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-
-## ⚠️ 网络异常无法下载模型怎么办？（离线兜底方案）
-由于国内网络访问 HuggingFace 官方受限，如果你在首次启动时卡在 `正在加载向量模型`，请直接使用我们提供的离线模型包：
-1. 点击去 **[Releases](https://github.com/3038816077/multi-model-agent-debate/releases/tag/v1.0.0)** 页面下载 `all-MiniLM-L6-v2.zip`。
-2. 将压缩包解压，把里面的 `hub` 文件夹放到你的电脑缓存目录：
-   - Windows: `C:\Users\你的用户名\.cache\huggingface\`
-   - Mac/Linux: `~/.cache/huggingface/`
-3. 打开 `.env` 文件，设置 `HF_HUB_OFFLINE=1`，重新启动服务即可实现秒级冷启动。
-
-## 🎯 效果演示
-
-1. **极致的流式体验**：输入问题，AI 会先极速打字输出“思考链路”，随后平滑打字输出最终回答；点击右侧方块按钮可实时中断生成。
-2. **多会话智能管理**：左侧边栏自动提取首句作为会话标题，支持一键新建，上下文完全隔离且持久化。
-3. **多工具并发调用**：输入 `北京、上海、厦门天气`，Agent 通过线程池在同一毫秒内并发请求 3 个城市接口并汇总。
-4. **实时联网搜索**：勾选输入框上方“联网搜索”，询问“最近 AI 新闻”，Agent 会自动调用搜索工具抓取最新资讯并总结。
-5. **多模型动态切换**：点击右上角“模型配置”，下拉选择厂商（如 DeepSeek）并填入 API Key，即可无缝切换底层大模型，且密钥仅存本地浏览器，用完即焚。
-6. **三阶段检索与降噪**：输入“核心硬件型号”，Agent 依次触发 Query改写 -> 混合召回 -> Rerank精排，精准剔除废话并在回答末尾附带来源文件。
-7. **全链路追踪**：所有终端日志均带有唯一的 `[Trace_ID]` 标签，方便一键排障。
-```
+</div>
