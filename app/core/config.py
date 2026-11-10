@@ -42,6 +42,22 @@ def get_model_registry():
         return {}
 
 
+def get_model_extra_body(model_name: str) -> dict:
+    """注册表里可以给单个模型追加请求参数，例如关掉深度思考：
+
+        "doubao-seed-2-1-lite": {
+            ...,
+            "extra_body": {"thinking": {"type": "disabled"}}
+        }
+
+    豆包 2.1 Pro/Lite 默认开启深度思考，一次简单问答要 20 秒以上；
+    关掉之后同样的请求 1.5 秒内返回。
+    """
+    config = get_model_registry().get(model_name) or {}
+    extra = config.get("extra_body")
+    return extra if isinstance(extra, dict) else {}
+
+
 def resolve_model_id(model_name: str) -> str:
     """注册表里可以用 model 字段覆盖真正发给厂商的模型名。
 

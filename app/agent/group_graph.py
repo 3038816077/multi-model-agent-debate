@@ -2,7 +2,7 @@ import concurrent.futures
 from typing import TypedDict, List, Dict
 from openai import OpenAI
 from langgraph.graph import StateGraph, END
-from app.core.config import get_model_registry, resolve_model_id, LLM_TIMEOUT, LLM_MAX_RETRIES
+from app.core.config import get_model_extra_body, get_model_registry, resolve_model_id, LLM_TIMEOUT, LLM_MAX_RETRIES
 from app.core.logger import logger
 
 class GroupState(TypedDict):
@@ -23,6 +23,12 @@ def get_client_for_model(model_name: str):
     return OpenAI(api_key=config["api_key"], base_url=config["base_url"],
                   timeout=LLM_TIMEOUT, max_retries=LLM_MAX_RETRIES)
 
+def _extra_kwargs(model_name: str) -> dict:
+    """注册表里给该模型配了 extra_body 就带上（比如豆包关掉深度思考）。"""
+    extra = get_model_extra_body(model_name)
+    return {"extra_body": extra} if extra else {}
+
+
 # ==================== 节点 1：副模型首轮独立作答 ====================
 def staff_first_round(state: GroupState):
     query = state["query"]
@@ -37,7 +43,8 @@ def staff_first_round(state: GroupState):
             resp = client.chat.completions.create(
                 model=resolve_model_id(model_name),
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=2048
+                max_tokens=2048,
+                **_extra_kwargs(model_name)
             )
             return model_name, resp.choices[0].message.content
         except Exception as e:
@@ -74,7 +81,8 @@ def staff_discussion(state: GroupState):
             resp = client.chat.completions.create(
                 model=resolve_model_id(model_name),
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=2048
+                max_tokens=2048,
+                **_extra_kwargs(model_name)
             )
             return model_name, resp.choices[0].message.content
         except Exception as e:
@@ -116,7 +124,8 @@ def chief_summary(state: GroupState):
         resp = client.chat.completions.create(
             model=resolve_model_id(chief_model),
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2048
+            max_tokens=2048,
+            **_extra_kwargs(model_name)
         )
         summary = resp.choices[0].message.content
     except Exception as e:

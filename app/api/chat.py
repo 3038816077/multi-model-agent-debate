@@ -10,7 +10,7 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id
+from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.logger import logger, set_trace
 from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory
@@ -26,6 +26,12 @@ from app.api.upload import load_document
 
 # 注入到提示词里的文档正文上限（字），超出的部分截断并告知模型
 MAX_DOC_CHARS_IN_PROMPT = 12000
+
+
+def _model_extra(model_id: str) -> dict:
+    """注册表里给该模型配了 extra_body 就带上（例如豆包 2.1 关掉深度思考）。"""
+    extra = get_model_extra_body(model_id)
+    return {"extra_body": extra} if extra else {}
 
 
 def _document_message(doc_id: str):
@@ -101,11 +107,13 @@ def models_health(auth: bool = Depends(verify_api_key)):
         model_id = item[0]
         try:
             conn = get_client_for_model(model_id)
+            _extra = get_model_extra_body(model_id)
             conn.chat.completions.create(
                 model=resolve_model_id(model_id),
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=1,
-                timeout=15
+                timeout=20,
+                **({"extra_body": _extra} if _extra else {})
             )
             return {"model_id": model_id, "ok": True, "detail": "可用"}
         except Exception as e:
@@ -576,7 +584,8 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                         resp = client.chat.completions.create(
                             model=resolve_model_id(model_name),
                             messages=[{"role": "user", "content": prompt}],
-                            max_tokens=2048
+                            max_tokens=2048,
+                            **_model_extra(model_name)
                         )
                         return model_name, resp.choices[0].message.content
                     except Exception as e:
@@ -610,7 +619,8 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                         resp = client.chat.completions.create(
                             model=resolve_model_id(model_name),
                             messages=[{"role": "user", "content": prompt}],
-                            max_tokens=2048
+                            max_tokens=2048,
+                            **_model_extra(model_name)
                         )
                         return model_name, resp.choices[0].message.content
                     except Exception as e:
@@ -642,7 +652,8 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                     resp = client.chat.completions.create(
                         model=resolve_model_id(request_body.chief_model),
                         messages=[{"role": "user", "content": prompt}],
-                        max_tokens=2048
+                        max_tokens=2048,
+                        **_model_extra(request_body.chief_model)
                     )
                     return resp.choices[0].message.content
                 except Exception as e:

@@ -3,6 +3,7 @@ import concurrent.futures
 from app.core.logger import logger, get_trace, set_trace
 from app.tools.registry import TOOL_SCHEMAS, execute_tool
 from app.agent.state import State
+from app.core.config import get_model_extra_body
 from app.core.llm_factory import get_llm_client, get_model_name, get_llm_context, set_llm_context, friendly_llm_error
 
 def llm_node(state: State):
@@ -20,11 +21,14 @@ def llm_node(state: State):
             logger.info("[路由控制] 检测到首次天气查询，强制模型调用工具...")
 
     try:
+        _extra = get_model_extra_body(get_model_name())
+        _kw = {"extra_body": _extra} if _extra else {}
         resp = get_llm_client().chat.completions.create(
             model=get_model_name(),
             messages=messages,
             tools=TOOL_SCHEMAS,
-            tool_choice=tool_choice
+            tool_choice=tool_choice,
+            **_kw
         )
     except Exception as e:
         # 抛出中文可读的原因，前端【服务异常：...】里能直接看到该改什么

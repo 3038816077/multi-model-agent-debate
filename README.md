@@ -13,7 +13,7 @@
   - **混合粗排**：基于 **BM25 + FAISS 双路召回 + RRF 融合算法**，解决专有名词召回率低的问题。
   - **精排降噪（Rerank）**：引入轻量级 **Cross-Encoder (BAAI/bge-reranker-base)** 对粗排 Top10 进行深度交互打分，最终提纯 Top3 上下文，防范大模型“中间迷失”。
 - 📄 **文档问答（Word / PDF 直接读）**：前端一键上传 `.docx` / `.pdf` / `.txt`，后端提取正文后注入上下文，可直接对合同、手册、论文提问；**单模型会话与多模型研讨都支持**——研讨时文档会同时进入专家首轮作答、交叉研讨、首席总结三个阶段。Word 用标准库解析（docx 本质是 zip + XML，**不额外引入依赖**，表格按 `单元格 | 单元格` 还原），PDF 用 `pypdf` 逐页抽取并标注页码；单文件上限 15MB / 20 万字，超长自动截断并明确告知模型，避免它编造文档里没有的内容。
-- 🔐 **无状态自定义大模型透传**：支持用户在前端输入自己的 API Key 切换不同大模型（通义千问/智谱/DeepSeek/豆包等）。后端基于 `contextvars` 实现请求级上下文隔离，密钥随请求传入，用完即焚，服务端零存储；配合接口白名单防范 SSRF，全链路日志强制脱敏，安全性极高。
+- 🔐 **无状态自定义大模型透传**：支持用户在前端输入自己的 API Key 切换不同大模型（通义千问/智谱/DeepSeek/豆包/GPT/Claude 等）。后端基于 `contextvars` 实现请求级上下文隔离，密钥随请求传入，用完即焚，服务端零存储；配合接口白名单防范 SSRF，全链路日志强制脱敏，安全性极高。
 - 🌐 **联网搜索开关与兜底**：集成博查（Bocha）联网搜索 API。前端提供“强制联网”开关，开启后后端通过 Prompt 注入强控模型调用 `search_web` 工具；同时支持智能自主联网（如询问实时新闻时），保证最新资讯的获取。
 - 🛡️ **安全防护与错误自愈**：新增 **API Key 接口鉴权**与基于 `slowapi` 的**单 IP 限流**；在工具节点设计了**精准前缀匹配的异常自愈机制**，当接口超时或参数错误时，回流 Error 日志引导大模型自主修正参数重试（最多2次），大幅提升任务成功率。
 - 📊 **全链路 Trace ID 追踪**：基于 Python `contextvars` 与自定义 `logging.Formatter`，实现从接口入口、Agent 节点、并发工具到第三方库的全链路日志追踪（完美解决线程池上下文丢失问题），大幅提升线上排障效率。
@@ -66,20 +66,24 @@ multi-model-agent-debate/
 所有内置模型都来自 `.env` 里的 `MODEL_REGISTRY`（一段单行 JSON），**加模型不需要改后端代码**：
 
 ```json
-"doubao-seed-2-1-pro":{
+"doubao-seed-2-1-lite":{
   "base_url":"https://ark.cn-beijing.volces.com/api/v3",
   "api_key":"你的火山方舟 ARK_API_KEY",
   "vendor":"字节跳动",
-  "label":"豆包 Seed 2.1 Pro",
-  "model":"ep-20250101xxxxxx-xxxxx"
+  "label":"豆包 Seed 2.1 Lite",
+  "model":"doubao-seed-2-1-lite-260915",
+  "extra_body":{"thinking":{"type":"disabled"}}
 }
 ```
 
 把这段追加到 `MODEL_REGISTRY` 的 JSON 里即可（注意逗号），重启后下拉框、多模型研讨都会自动出现。
 
-- `model` 字段可选，表示**真正发给厂商的模型名**：注册表里的 key 可以起一个干净好读的名字（如上例的 `doubao-seed-2-1-pro`），真实模型 ID 放在 `model` 里。
+- `model` 字段可选，表示**真正发给厂商的模型名**：注册表里的 key 可以起一个干净好读的名字（如上例的 `doubao-seed-2-1-lite`），真实模型 ID 放在 `model` 里。
   不写这个字段时，key 会直接当作模型名发给厂商（qwen / glm / deepseek / kimi 都是这样）。
-- 豆包的 `model` 也可以直接填模型 ID（如 `doubao-seed-2-1-pro-260915`），以方舟控制台为准。
+- 豆包的 `model` 也可以直接填模型 ID（如 `doubao-seed-2-1-lite-260915`），以方舟控制台为准。
+- `extra_body` 可选，会原样追加到请求体里。豆包 Seed 2.1 系列默认开启**深度思考**，一次简单问答要 20~60 秒，經常直接超时；
+  按上面的写法关掉之后，同样的请求 1~2 秒就返回，工具调用和流式输出都正常。
+- 想让它默认被选中：把 `static/index.html` 里的 `DEFAULT_MODEL_ID` 改成你的模型 key。
 - 想让它默认被选中：把 `static/index.html` 里的 `DEFAULT_MODEL_ID` 改成你的模型 key。
 
 ### 2. 方式一：Docker 部署（强烈推荐）
