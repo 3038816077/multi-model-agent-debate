@@ -298,10 +298,12 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 /* ---------- 研讨配置面板 ---------- */
 #groupSetupPanel {
     display: none; flex: 1; flex-direction: column; gap: 16px; padding: 24px;
-    background: linear-gradient(180deg, #fbfcff, #f5f7fd);
-    justify-content: center; align-items: center; overflow-y: auto;
+    background:
+        radial-gradient(700px 320px at 100% 0%, rgba(224, 231, 255, .55) 0%, transparent 65%),
+        linear-gradient(180deg, #fbfcff, #f5f7fd);
+    justify-content: flex-start; align-items: center; overflow-y: auto;
 }
-.setup-card { width: 100%; max-width: 520px; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 26px; box-shadow: var(--shadow); }
+.setup-card { width: 100%; max-width: 520px; margin: auto 0; background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 26px; box-shadow: var(--shadow); }
 .setup-card h3 { margin-bottom: 18px; color: var(--ink); text-align: center; font-size: 16px; font-weight: 700; }
 .setup-group { margin-bottom: 16px; }
 .setup-group label { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
@@ -654,9 +656,13 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 quickBtns.style.display = 'none';
                 modelSelectWrapper.style.display = 'none'; 
                 if (groupConfig) {
+                    chatMessages.style.display = '';
                     groupSetupPanel.style.display = 'none';
                     inputWrapper.style.display = 'block';
                 } else {
+                    // 配置阶段把消息区让出来，否则两者各占一半高度，
+                    // 上面的空状态文案和下面的配置卡会挤在一起（主模型选择被顶出可视区）
+                    chatMessages.style.display = 'none';
                     groupSetupPanel.style.display = 'flex';
                     inputWrapper.style.display = 'none';
                 }
@@ -665,6 +671,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 chatSubtitle.textContent = "基于 LangGraph + ReAct | 深度流式输出";
                 quickBtns.style.display = 'flex';
                 modelSelectWrapper.style.display = 'flex';
+                chatMessages.style.display = '';
                 groupSetupPanel.style.display = 'none';
                 inputWrapper.style.display = 'block';
             }
