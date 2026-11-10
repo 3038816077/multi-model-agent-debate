@@ -22,12 +22,39 @@ from app.agent.group_graph import GroupState, get_client_for_model
 from app.db.database import SessionLocal
 from app.db.crud import get_messages, save_message, get_or_create_session, update_long_term_memory
 from app.middleware.auth import limiter, verify_api_key
+from app.api.upload import load_document
+
+# 注入到提示词里的文档正文上限（字），超出的部分截断并告知模型
+MAX_DOC_CHARS_IN_PROMPT = 12000
+
+
+def _document_message(doc_id: str):
+    """把上传文档的正文包装成一条 system 消息；文档不存在返回 None。"""
+    doc = load_document(doc_id)
+    if not doc:
+        return None
+    text = doc.get("text", "")
+    truncated = len(text) > MAX_DOC_CHARS_IN_PROMPT
+    if truncated:
+        text = text[:MAX_DOC_CHARS_IN_PROMPT]
+    tail = (f"\n\n（文档较长，以上只截取了前 {MAX_DOC_CHARS_IN_PROMPT} 字；"
+            "如果用户问的内容不在这里，请明确告诉用户文档被截断了）") if truncated else ""
+    return {
+        "role": "system",
+        "content": (
+            f"【用户上传的文档：{doc['filename']}（{doc.get('kind','文档')}，共 {doc.get('chars', len(text))} 字）】\n"
+            f"{text}{tail}\n"
+            "【文档结束】\n"
+            "请优先依据以上文档内容回答；文档里没有的信息要明确说“文档中未提及”，不要编造。"
+        ),
+    }
 
 router = APIRouter()
 
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    attachment_id: Optional[str] = None
     user_api_key: Optional[str] = None
     user_base_url: Optional[str] = None
     user_model_name: Optional[str] = None
@@ -250,6 +277,14 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         for city_weather in WEATHER_CACHE[session_id].values():
             known_info.append("已知信息：" + city_weather)
     
+    # 上传的 Word / PDF：正文作为 system 消息插到本轮提问之前
+    if request_body.attachment_id:
+        doc_msg = _document_message(request_body.attachment_id)
+        if doc_msg:
+            messages.append(doc_msg)
+        else:
+            logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
+
     user_content = request_body.message
     if known_info:
         user_content = "内部参考数据：\n" + "\n".join(known_info) + "\n\n用户问题：" + request_body.message + "\n\n要求：1. 参考数据直接使用。2. 省略问法默认查天气，直接调用工具。3. 绝对禁止复述参考数据，禁止提已知信息，禁止问是否重新查询，直接输出简洁结果。"
@@ -374,6 +409,14 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
         for city_weather in WEATHER_CACHE[session_id].values():
             known_info.append("已知信息：" + city_weather)
     
+    # 上传的 Word / PDF：正文作为 system 消息插到本轮提问之前
+    if request_body.attachment_id:
+        doc_msg = _document_message(request_body.attachment_id)
+        if doc_msg:
+            messages.append(doc_msg)
+        else:
+            logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
+
     user_content = request_body.message
     if known_info:
         user_content = "内部参考数据：\n" + "\n".join(known_info) + "\n\n用户问题：" + request_body.message + "\n\n要求：1. 参考数据直接使用。2. 省略问法默认查天气，直接调用工具。3. 绝对禁止复述参考数据，禁止提已知信息，禁止问是否重新查询，直接输出简洁结果。"

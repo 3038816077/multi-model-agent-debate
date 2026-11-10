@@ -273,6 +273,28 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 #sendBtn:active { transform: translateY(0) scale(.97); }
 #sendBtn.stop-state { background: linear-gradient(135deg, #475569, #1e293b); box-shadow: 0 10px 20px -14px rgba(15, 23, 42, .9); }
 
+/* ---------- 附件上传 ---------- */
+.attach-btn {
+    display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: #fff; color: var(--ink-2);
+    font-size: 12.5px; font-family: inherit; cursor: pointer; transition: all .16s;
+}
+.attach-btn:hover { border-color: #c7d2fe; background: var(--primary-light); color: var(--primary); }
+.attach-btn.busy { opacity: .6; pointer-events: none; }
+.attach-chip {
+    display: none; align-items: center; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 10px; padding: 8px 12px; border-radius: 10px;
+    background: var(--primary-light); border: 1px solid #e0e7ff; font-size: 12.5px; color: #4338ca;
+}
+.attach-name { font-weight: 600; }
+.attach-meta { color: var(--muted); }
+.attach-warn { color: #b45309; }
+.attach-remove {
+    margin-left: auto; border: none; background: transparent; color: var(--muted);
+    cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 6px; font-family: inherit;
+}
+.attach-remove:hover { background: #fff; color: #dc2626; }
+
 /* ---------- 研讨配置面板 ---------- */
 #groupSetupPanel {
     display: none; flex: 1; flex-direction: column; gap: 16px; padding: 24px;
@@ -408,7 +430,10 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     <label class="web-search-switch" id="webSearchLabel">
                         <input type="checkbox" id="webSearchToggle" onchange="toggleWebSearch()"> 🌐 联网搜索
                     </label>
+                    <button type="button" class="attach-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="上传 Word / PDF，然后针对文档提问">📎 文档</button>
+                    <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md,.csv" style="display:none" onchange="handleFileSelect(this)">
                 </div>
+                <div class="attach-chip" id="attachChip" style="display:none;"></div>
                 <div class="chat-input-area">
                     <input type="text" id="userInput" placeholder="输入你的问题，按回车发送..." autocomplete="off">
                     <button id="sendBtn" onclick="handleSendClick()">
@@ -961,12 +986,79 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             }
         }
 
-        async function sendMessage() {
-            const text = userInput.value.trim();
-            if (!text || isGenerating) return;
+        // ==================== 附件（Word / PDF） ====================
+        let attachedDoc = null;
+        const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
-            addMessage(text, 'user');
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+
+        function handleFileSelect(input) {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            const chip = document.getElementById('attachChip');
+            if (file.size > MAX_UPLOAD_BYTES) {
+                attachedDoc = null;
+                chip.style.display = 'flex';
+                chip.innerHTML = '<span class="attach-warn">⚠️ 文件超过 15MB</span><button class="attach-remove" onclick="clearAttachment()">✕</button>';
+                return;
+            }
+            const btn = document.getElementById('attachBtn');
+            btn.classList.add('busy');
+            chip.style.display = 'flex';
+            chip.innerHTML = '<span class="attach-name">⏳ 正在解析 ' + escapeHtml(file.name) + ' …</span>';
+
+            const reader = new FileReader();
+            reader.onload = async () => {
+                try {
+                    const res = await fetch('/upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                        body: JSON.stringify({ filename: file.name, content_base64: reader.result })
+                    });
+                    const data = await res.json();
+                    if (!res.ok || data.code !== 200) throw new Error((data && data.message) || ('HTTP ' + res.status));
+                    attachedDoc = data.data;
+                    chip.innerHTML =
+                        '<span class="attach-name">📎 ' + escapeHtml(attachedDoc.filename) + '</span>' +
+                        '<span class="attach-meta">' + escapeHtml(attachedDoc.kind) + ' · ' + attachedDoc.chars.toLocaleString() + ' 字</span>' +
+                        (attachedDoc.warning ? '<span class="attach-warn">⚠️ ' + escapeHtml(attachedDoc.warning) + '</span>' : '') +
+                        '<button class="attach-remove" onclick="clearAttachment()" title="移除附件">✕</button>';
+                } catch (e) {
+                    attachedDoc = null;
+                    chip.innerHTML = '<span class="attach-warn">⚠️ ' + escapeHtml(e.message || '上传失败') + '</span>' +
+                        '<button class="attach-remove" onclick="clearAttachment()">✕</button>';
+                } finally {
+                    btn.classList.remove('busy');
+                }
+            };
+            reader.onerror = () => {
+                attachedDoc = null;
+                btn.classList.remove('busy');
+                chip.innerHTML = '<span class="attach-warn">⚠️ 读取本地文件失败</span>';
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function clearAttachment() {
+            attachedDoc = null;
+            const chip = document.getElementById('attachChip');
+            if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
+        }
+
+        async function sendMessage() {
+            let text = userInput.value.trim();
+            if ((!text && !attachedDoc) || isGenerating) return;
+            if (!text && attachedDoc) text = '请阅读这份文档，并总结其中的要点。';
+
+            const docId = attachedDoc ? attachedDoc.doc_id : null;
+            const docLabel = attachedDoc ? '📎 ' + attachedDoc.filename + '\n' : '';
+
+            addMessage(docLabel + text, 'user');
             userInput.value = '';
+            clearAttachment();
             updateButtonState(true); 
             
             const thinkingDiv = document.createElement('div');
@@ -994,6 +1086,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     body: JSON.stringify({ 
                         message: text, session_id: sessionId,
                         user_api_key: reqApiKey, user_base_url: reqBaseUrl, user_model_name: reqModelName,
+                        attachment_id: docId,
                         enable_web_search: document.getElementById('webSearchToggle').checked
                     }),
                     signal: currentAbortController.signal

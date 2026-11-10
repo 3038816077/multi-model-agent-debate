@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from slowapi.errors import RateLimitExceeded
 
 from app.api.chat import router as chat_router
+from app.api.upload import router as upload_router
 from app.db.vector_store import init_knowledge_base
 from app.db import models
 from app.db.database import engine
@@ -37,6 +38,7 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
 app.include_router(chat_router)
+app.include_router(upload_router)
 
 # 7. 挂载静态文件
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
