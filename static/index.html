@@ -544,6 +544,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         let currentAbortController = null;
         let typingIntervals = {};
 
+        // 名字匹配是「包含」判断，越具体的 key 要放越前面（gpt-6.1 要排在 gpt-6 之前）
         const modelVisualConfig = {
             'kimi': { name: 'Kimi', icon: '🌙', color: '#8b5cf6' },
             'moonshot': { name: 'Kimi', icon: '🌙', color: '#8b5cf6' },
@@ -552,6 +553,14 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             'deepseek': { name: 'DeepSeek', icon: '🐋', color: '#4f46e5' },
             'doubao': { name: '豆包', icon: '🫘', color: '#3b82f6' },
             'volc': { name: '豆包', icon: '🫘', color: '#3b82f6' },
+            'sonnet': { name: 'Claude Sonnet', icon: '🎭', color: '#d97757' },
+            'opus': { name: 'Claude Opus', icon: '🎩', color: '#b45309' },
+            'haiku': { name: 'Claude Haiku', icon: '🍃', color: '#059669' },
+            'claude': { name: 'Claude', icon: '🎭', color: '#d97757' },
+            'gpt-6.1': { name: 'GPT-6.1', icon: '🌟', color: '#0ea5e9' },
+            'gpt-6': { name: 'GPT-6', icon: '✨', color: '#10a37f' },
+            'gpt-5.6': { name: 'GPT-5.6', icon: '💫', color: '#6366f1' },
+            'gpt': { name: 'GPT', icon: '✨', color: '#10a37f' },
             'default': { name: 'AI', icon: '🤖', color: '#6b7280' }
         };
         function getModelVisual(modelName) {
@@ -1219,8 +1228,12 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         function addMessage(content, role) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${role === 'assistant' ? 'ai' : role}`;
-            if (role === 'assistant' && content.includes('### —')) {
-                msgDiv.innerHTML = renderMarkdown(content);
+            if (role === 'assistant') {
+                // 历史里的回答也要按 Markdown 渲染，否则 **加粗** 会原样显示
+                const body = document.createElement('div');
+                body.className = 'markdown-body';
+                body.innerHTML = renderMarkdown(content);
+                msgDiv.appendChild(body);
             } else {
                 msgDiv.textContent = content;
             }
@@ -1256,6 +1269,46 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             await loadSessionList();
         }
         
+        // ==================== 研讨历史还原（和实时渲染同一套样式） ====================
+        function histBlock(round, label, map) {
+            if (map.has(round)) return map.get(round);
+            const block = document.createElement('div');
+            block.className = 'round-block';
+            const divider = document.createElement('div');
+            divider.className = 'stage-divider';
+            divider.textContent = '— ' + label + ' —';
+            block.appendChild(divider);
+            chatMessages.appendChild(block);
+            map.set(round, block);
+            return block;
+        }
+
+        function histSpeak(round, model, content, map) {
+            const label = round === 2 ? '第二轮：交叉研讨' : '第一轮：专家独立作答';
+            const block = histBlock(round, label, map);
+            const visual = getModelVisual(model);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'discussion-msg';
+            wrapper.innerHTML = `
+                <div class="model-avatar" style="color: ${visual.color}; border: 1px solid ${visual.color}50;">${visual.icon}</div>
+                <div class="model-content-wrapper">
+                    <div class="model-name-tag" style="color: ${visual.color};">${escapeHtml(visual.name)}${round === 2 ? ' · 研讨' : ''}</div>
+                    <div class="markdown-body message-text">${renderMarkdown(content || '')}</div>
+                </div>`;
+            block.appendChild(wrapper);
+        }
+
+        function histSummary(model, content, map) {
+            const block = histBlock(3, '首席总结', map);
+            const visual = getModelVisual(model);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'summary-msg';
+            wrapper.innerHTML = `
+                <div class="summary-title">👑 首席总结 (${escapeHtml(visual.name)})</div>
+                <div class="markdown-body message-text">${renderMarkdown(content || '')}</div>`;
+            block.appendChild(wrapper);
+        }
+
         async function loadHistory(id) {
             chatMessages.innerHTML = '<div class="message ai">正在加载历史记录...</div>';
             try {
@@ -1263,7 +1316,18 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 const data = await res.json();
                 chatMessages.innerHTML = '';
                 if (data.code === 200 && data.data.length > 0) {
-                    data.data.forEach(m => addMessage(m.content, m.role));
+                    const groupBlocks = new Map();
+                    data.data.forEach(m => {
+                        const tp = m.thought_process || '';
+                        if (tp.startsWith('GROUP_SPEAK:')) {
+                            const parts = tp.split(':');
+                            histSpeak(parseInt(parts[1], 10) || 1, parts.slice(2).join(':'), m.content, groupBlocks);
+                        } else if (tp.startsWith('GROUP_SUMMARY:')) {
+                            histSummary(tp.slice('GROUP_SUMMARY:'.length), m.content, groupBlocks);
+                        } else {
+                            addMessage(m.content, m.role);
+                        }
+                    });
                 } else {
                     chatMessages.innerHTML = '<div class="message ai">历史记录为空。</div>';
                 }

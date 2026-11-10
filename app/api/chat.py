@@ -653,17 +653,14 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             
             yield f"data: {json.dumps({'event': 'summary', 'model': request_body.chief_model, 'content': summary_content}, ensure_ascii=False)}\n\n"
             
-            # 存库，防止刷新丢失
-            full_history = "### — 第一轮：专家独立作答 —\n\n"
+            # 存库：每位专家单独一条，thought_process 里带阶段和模型名，
+            # 这样重新打开会话时前端能还原成同样的头像气泡，而不是一大坨纯文本
             for m, ans in state["first_round"].items():
-                full_history += f"**{m}**:\n{ans}\n\n"
-            full_history += "### — 第二轮：交叉研讨 —\n\n"
+                save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:1:{m}")
             for m, ans in state["discussion"].items():
-                full_history += f"**{m}**:\n{ans}\n\n"
-            full_history += "### 👑 首席总结\n\n"
-            full_history += summary_content
-
-            save_message(db, session_id, "assistant", full_history)
+                save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:2:{m}")
+            save_message(db, session_id, "assistant", summary_content or "",
+                         f"GROUP_SUMMARY:{request_body.chief_model}")
 
             yield f"data: {json.dumps({'event': 'done', 'session_id': session_id})}\n\n"
 
