@@ -38,6 +38,8 @@ def friendly_llm_error(exc: Exception, model_name: str = "") -> str:
         return prefix + "不存在：模型名写错了（404），检查 MODEL_REGISTRY 里的 key 和 model 字段"
     if "429" in text or "rate limit" in low or "too many requests" in low:
         return prefix + "触发限流（429），稍等几秒再试"
+    if "503" in text or "no available accounts" in low:
+        return prefix + "暂无可用账号（503）：中转站这个分组当前没有空闲账号，稍后重试，或换用别的模型分组"
     if "timeout" in low or "timed out" in low:
         return prefix + "请求超时，检查网络或调大 .env 里的 LLM_TIMEOUT"
     if "connection" in low or "getaddrinfo" in low or "ssl" in low:

@@ -432,6 +432,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 <option value="kimi">月之暗面 Kimi</option>
                 <option value="doubao">豆包 (火山方舟)</option>
                 <option value="openai">OpenAI (第三方中转)</option>
+                <option value="anthropic">Anthropic (中转 Claude)</option>
             </select>
             <label>接口地址</label>
             <input type="text" id="userBaseUrl">
@@ -1207,6 +1208,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             else if (provider === 'kimi') { urlInput.value = 'https://api.moonshot.cn/v1'; modelInput.value = 'kimi-k3.1-pro'; }
             else if (provider === 'doubao') { urlInput.value = 'https://ark.cn-beijing.volces.com/api/v3'; modelInput.value = 'doubao-seed-2-1-pro-260915'; }
             else if (provider === 'openai') { urlInput.value = 'https://api.lwxiaoye.top/v1'; modelInput.value = 'gpt-5.6'; }
+            else if (provider === 'anthropic') { urlInput.value = 'https://api.lwxiaoye.top/v1'; modelInput.value = 'claude-sonnet-4-6'; }
         }
 
         userInput.addEventListener('keydown', e => { 
