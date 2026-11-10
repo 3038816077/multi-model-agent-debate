@@ -814,11 +814,16 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         // 每一轮各自一个容器，"轮次::模型" 作为唯一键：
         // 后一轮永远只往自己的容器里写，物理上不可能覆盖前一轮的 DOM。
         async function sendGroupMessage() {
-            const text = userInput.value.trim();
-            if (!text || isGenerating || !groupConfig) return;
+            let text = userInput.value.trim();
+            if ((!text && !attachedDoc) || isGenerating || !groupConfig) return;
+            if (!text && attachedDoc) text = '请各位专家阅读这份文档，讨论其中的要点与潜在风险。';
 
-            addMessage(text, 'user');
+            const docId = attachedDoc ? attachedDoc.doc_id : null;
+            const docLabel = attachedDoc ? '📎 ' + attachedDoc.filename + '\n' : '';
+
+            addMessage(docLabel + text, 'user');
             userInput.value = '';
+            clearAttachment();
             updateButtonState(true);
 
             currentAbortController = new AbortController();
@@ -898,7 +903,8 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         message: text, 
                         chief_model: groupConfig.chief,
                         staff_models: groupConfig.staffs,
-                        session_id: sessionId
+                        session_id: sessionId,
+                        attachment_id: docId
                     }),
                     signal: currentAbortController.signal
                 });

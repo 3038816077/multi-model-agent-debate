@@ -63,6 +63,7 @@ class ChatRequest(BaseModel):
 class GroupChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    attachment_id: Optional[str] = None
     chief_model: str
     staff_models: List[str]
 
@@ -526,6 +527,26 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     session_id = request_body.session_id or str(uuid.uuid4())
     save_message(db, session_id, "user", request_body.message)
 
+    # 上传的文档：整段拼进 query，三个阶段（首轮作答 / 交叉研讨 / 首席总结）都能看到原文
+    group_query = request_body.message
+    if request_body.attachment_id:
+        doc = load_document(request_body.attachment_id)
+        if doc:
+            text = doc.get("text", "")
+            cut = len(text) > MAX_DOC_CHARS_IN_PROMPT
+            if cut:
+                text = text[:MAX_DOC_CHARS_IN_PROMPT]
+            tail = "\n（文档较长，以上只截取了开头部分）" if cut else ""
+            group_query = (
+                f"【用户上传的文档：{doc['filename']}（{doc.get('kind', '文档')}，共 {doc.get('chars', len(text))} 字）】\n"
+                f"{text}{tail}\n【文档结束】\n\n"
+                "请所有专家基于以上文档内容回答下面的问题；文档里没有的信息要明确说明“文档中未提及”，不要编造。\n\n"
+                f"用户问题：{request_body.message}"
+            )
+            logger.info(f"【研讨模式】已注入文档 {doc['filename']}（{doc.get('chars', 0)} 字，截断={cut}）")
+        else:
+            logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
+
     if request_body.chief_model in request_body.staff_models:
         async def error_gen():
             yield f"data: {json.dumps({'event': 'error', 'data': '主模型不能和副模型重复'})}\n\n"
@@ -534,7 +555,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     async def event_generator():
         try:
             state: GroupState = {
-                "query": request_body.message,
+                "query": group_query,
                 "chief_model": request_body.chief_model,
                 "staff_models": request_body.staff_models,
                 "first_round": {},
