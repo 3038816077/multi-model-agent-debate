@@ -37,7 +37,7 @@ TIER_STRONG = "strong"
 # 换模型只需要改这里，不用动业务代码。
 MODEL_TIERS = {
     TIER_CHEAP: ["glm-4-flash", "doubao-seed-2-1-lite", "qwen-plus"],
-    TIER_MID: ["deepseek-chat", "kimi-k3.1-pro", "glm-4-flash"],
+    TIER_MID: ["gpt-5.6", "deepseek-chat", "kimi-k3.1-pro", "glm-4-flash"],
     TIER_STRONG: ["gpt-6.1-sol", "claude-opus-4-6", "gpt-6", "gpt-5.6", "claude-sonnet-4-6"],
 }
 

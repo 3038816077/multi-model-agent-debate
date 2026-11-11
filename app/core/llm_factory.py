@@ -1,7 +1,7 @@
 import contextvars
 from openai import OpenAI
 from app.core.logger import logger
-from app.core.config import get_model_registry, OPENAI_API_KEY, OPENAI_BASE_URL, LLM_TIMEOUT, LLM_MAX_RETRIES
+from app.core.config import get_model_registry, OPENAI_API_KEY, OPENAI_BASE_URL, LLM_TIMEOUT, LLM_MAX_RETRIES, DEFAULT_MODEL_ID
 
 # 使用 contextvars 实现请求级别的上下文隔离
 _llm_client_ctx = contextvars.ContextVar("llm_client", default=None)
@@ -11,7 +11,7 @@ _llm_model_name_ctx = contextvars.ContextVar("llm_model_name", default=None)
 try:
     _default_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL,
                              timeout=LLM_TIMEOUT, max_retries=LLM_MAX_RETRIES)
-    _default_model_name = "qwen-plus"
+    _default_model_name = DEFAULT_MODEL_ID
 except Exception as e:
     logger.error(f"初始化默认 LLM Client 失败: {e}")
     _default_client = None

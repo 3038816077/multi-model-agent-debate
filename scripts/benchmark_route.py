@@ -59,12 +59,16 @@ def load_key():
     return ""
 
 
-def ask(base, key, message, auto_route, timeout=180):
-    payload = json.dumps({
+def ask(base, key, message, auto_route, force_model=None, timeout=180):
+    body = {
         "message": message,
         "session_id": str(uuid.uuid4()),
         "auto_route": auto_route,
-    }).encode()
+    }
+    if force_model:
+        # A 组固定用同一个强模型，两组才有可比性
+        body["user_model_name"] = force_model
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
         base.rstrip("/") + "/chat",
         data=payload,
@@ -107,11 +111,11 @@ def read_usage(path):
     return out
 
 
-def run_mode(base, key, tasks, auto_route, usage_path):
+def run_mode(base, key, tasks, auto_route, usage_path, force_model=None):
     rows = []
     for label, message, expect in tasks:
         before = read_usage(usage_path)
-        r = ask(base, key, message, auto_route)
+        r = ask(base, key, message, auto_route, force_model=force_model)
         time.sleep(0.2)
         after = read_usage(usage_path)
         trace = r.get("trace_id")
@@ -127,6 +131,7 @@ def run_mode(base, key, tasks, auto_route, usage_path):
             "prompt_tokens": sum(x.get("prompt_tokens", 0) for x in new),
             "completion_tokens": sum(x.get("completion_tokens", 0) for x in new),
             "cost_usd": sum(x.get("cost_usd", 0) for x in new),
+            "answer": r.get("answer", ""),
         })
     return rows
 
@@ -153,6 +158,10 @@ def main():
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--usage", default="data/usage.jsonl")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 个任务，快速验证用")
+    ap.add_argument("--baseline", default="gpt-6.1-sol",
+                    help="A 组的固定模型（对照组），默认 gpt-6.1-sol")
+    ap.add_argument("--save", default="data/bench_answers.json",
+                    help="把两组答案存成文件，方便人工打分对比")
     args = ap.parse_args()
 
     key = load_key()
@@ -162,8 +171,9 @@ def main():
     tasks = TASKS[: args.limit] if args.limit else TASKS
     print(f"共 {len(tasks)} 个任务，base={args.base}")
 
-    off = run_mode(args.base, key, tasks, auto_route=False, usage_path=args.usage)
-    s_off = summarize("A 组：关闭路由（全部用默认模型）", off)
+    off = run_mode(args.base, key, tasks, auto_route=False, usage_path=args.usage,
+                   force_model=args.baseline)
+    s_off = summarize(f"A 组：关闭路由（全部用 {args.baseline}）", off)
     on = run_mode(args.base, key, tasks, auto_route=True, usage_path=args.usage)
     s_on = summarize("B 组：开启路由（按档位选模型）", on)
 
@@ -173,6 +183,19 @@ def main():
         print(f"成本：${s_off['cost']:.6f} -> ${s_on['cost']:.6f}   降幅 {drop:.1f}%")
     print(f"平均延迟：{s_off['avg_ms']}ms -> {s_on['avg_ms']}ms")
     print("质量：需要人工打分或另接 judge 模型，脚本不自动评判")
+
+    # 把两组答案存下来，方便逐条对比打分
+    try:
+        os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
+        with open(args.save, "w", encoding="utf-8") as f:
+            json.dump({
+                "baseline_model": args.baseline,
+                "A_no_route": [{"task": r["label"], "answer": r["answer"]} for r in off],
+                "B_routed": [{"task": r["label"], "answer": r["answer"]} for r in on],
+            }, f, ensure_ascii=False, indent=2)
+        print(f"两组答案已保存到 {args.save}")
+    except Exception as e:
+        print(f"保存答案失败：{e}")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,9 @@ try:
                     timeout=LLM_TIMEOUT, max_retries=LLM_MAX_RETRIES)
 except Exception:
     client = None
-MODEL_NAME = "qwen-plus"
+# 默认模型：.env 里配 DEFAULT_MODEL_ID，没配就用 qwen-plus 兜底
+DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "qwen-plus")
+MODEL_NAME = DEFAULT_MODEL_ID
 
 # ========== 多模型注册表配置 ==========
 MODEL_REGISTRY_STR = os.getenv("MODEL_REGISTRY", "{}")
