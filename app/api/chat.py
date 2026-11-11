@@ -41,7 +41,12 @@ def _apply_auto_route(request_body):
 
     优先级：用户显式指定模型 > 自动路由 > 系统默认模型。
     """
-    if not AUTO_ROUTE or not request_body.auto_route:
+    if not request_body.auto_route:
+        return None
+    if not AUTO_ROUTE:
+        # 最容易踩的坑：启动时忘了设环境变量，或者 set AUTO_ROUTE=true 带了尾随空格
+        logger.warning("[auto-route] 请求要求自动路由，但服务端 AUTO_ROUTE 未开启；"
+                       "启动前请设置环境变量 AUTO_ROUTE=true")
         return None
     if request_body.user_model_name or request_body.user_api_key:
         return None

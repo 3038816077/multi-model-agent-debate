@@ -171,6 +171,20 @@ def main():
     tasks = TASKS[: args.limit] if args.limit else TASKS
     print(f"共 {len(tasks)} 个任务，base={args.base}")
 
+    # 预检查：自动路由没生效就直接退出，避免跑完 8 分钟才发现数据作废
+    probe = ask(args.base, key, "把这句话翻译成英文：路由预检查。", auto_route=True)
+    if not probe.get("ok"):
+        print(f"❌ 服务没起来或鉴权失败：{probe.get('error')}")
+        return
+    if not probe.get("routed_model"):
+        print("❌ 服务端的自动路由没有生效，本次结果无效。")
+        print("   检查：启动服务前是否设置了环境变量 AUTO_ROUTE=true")
+        print("   Windows CMD 正确写法（注意不要写成一行加 &&，会带尾随空格）：")
+        print("       set AUTO_ROUTE=true")
+        print("       python run.py")
+        return
+    print(f"✅ 自动路由已生效，预检查命中 {probe['routed_model']}")
+
     off = run_mode(args.base, key, tasks, auto_route=False, usage_path=args.usage,
                    force_model=args.baseline)
     s_off = summarize(f"A 组：关闭路由（全部用 {args.baseline}）", off)
