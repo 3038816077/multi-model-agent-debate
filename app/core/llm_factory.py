@@ -9,9 +9,14 @@ _llm_model_name_ctx = contextvars.ContextVar("llm_model_name", default=None)
 
 # 全局默认 Client (兜底)
 try:
-    _default_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL,
-                             timeout=LLM_TIMEOUT, max_retries=LLM_MAX_RETRIES)
-    _default_model_name = DEFAULT_MODEL_ID
+    # 默认模型优先从注册表取 base_url / api_key / 真实模型名，
+    # 这样换模型只需要改一处 MODEL_REGISTRY，不用再同步 OPENAI_BASE_URL
+    _default_entry = get_model_registry().get(DEFAULT_MODEL_ID) or {}
+    _default_client = OpenAI(
+        api_key=_default_entry.get("api_key") or OPENAI_API_KEY,
+        base_url=_default_entry.get("base_url") or OPENAI_BASE_URL,
+        timeout=LLM_TIMEOUT, max_retries=LLM_MAX_RETRIES)
+    _default_model_name = _default_entry.get("model") or DEFAULT_MODEL_ID
 except Exception as e:
     logger.error(f"初始化默认 LLM Client 失败: {e}")
     _default_client = None

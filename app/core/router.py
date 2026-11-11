@@ -46,6 +46,7 @@ MODEL_TIERS = {
 MODEL_PRICE_PER_M = {
     "glm-4-flash": (0.00, 0.00),
     "qwen-plus": (0.40, 1.20),
+    "qwen3.8-flash": (0.05, 0.20),   # 待核对：按百炼控制台实际单价改
     "doubao-seed-2-1-lite": (0.15, 0.30),
     "deepseek-chat": (0.27, 1.10),
     "kimi-k3.1-pro": (0.60, 2.50),

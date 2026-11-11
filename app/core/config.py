@@ -55,7 +55,15 @@ def get_model_extra_body(model_name: str) -> dict:
     豆包 2.1 Pro/Lite 默认开启深度思考，一次简单问答要 20 秒以上；
     关掉之后同样的请求 1.5 秒内返回。
     """
-    config = get_model_registry().get(model_name) or {}
+    registry = get_model_registry()
+    config = registry.get(model_name) or {}
+    if not config:
+        # 传进来的可能是解析后的真实模型名（例如注册表 key 是 qwen-plus，
+        # 实际发给厂商的是 qwen3.8-flash），按 model 字段反查一次
+        for entry in registry.values():
+            if entry.get("model") == model_name:
+                config = entry
+                break
     extra = config.get("extra_body")
     return extra if isinstance(extra, dict) else {}
 
