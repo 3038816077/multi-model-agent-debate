@@ -4,6 +4,8 @@
 
 ### 让多个大模型先各自作答，再互相挑错，最后由首席模型总结
 
+<sub>Multi-model debate for LLMs — independent answers, cross-review, then a chief model synthesizes.</sub>
+
 一套开箱即用的**多模型研讨 Agent**：LangGraph 编排 · Hybrid RAG 检索（BM25 + FAISS + 精排）· Word / PDF 直接问答 · SSE 流式输出 · 多会话持久化
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
