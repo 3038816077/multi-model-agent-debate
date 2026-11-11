@@ -146,7 +146,7 @@ def summarize(name, rows):
     print(f"档位分布: {dict(tiers)}")
     print(f"{'任务':8} {'档位':7} {'模型':16} {'in':>6} {'out':>5} {'成本$':>10} {'耗时':>7}")
     for r in rows:
-        flag = "" if r["ok"] else "  ❌" + str(r["error"])[:40]
+        flag = "" if r["ok"] else "  [X] " + str(r["error"])[:40]
         print(f"{r['label']:8} {str(r['tier'] or '-'):7} {str(r['model'] or '-'):16} "
               f"{r['prompt_tokens']:>6} {r['completion_tokens']:>5} {r['cost_usd']:>10.6f} "
               f"{r['wall_ms']:>6}ms{flag}")
@@ -162,11 +162,13 @@ def main():
                     help="A 组的固定模型（对照组），默认 gpt-6.1-sol")
     ap.add_argument("--save", default="data/bench_answers.json",
                     help="把两组答案存成文件，方便人工打分对比")
+    ap.add_argument("--only", choices=["both", "a", "b"], default="both",
+                    help="只跑其中一组（b 可复用上次的 A 组数据，省一次强模型开销）")
     args = ap.parse_args()
 
     key = load_key()
     if not key:
-        print("⚠️  没找到 API_KEY，若服务端未开启鉴权可以忽略")
+        print("[提示] 没找到 API_KEY，若服务端未开启鉴权可以忽略")
 
     tasks = TASKS[: args.limit] if args.limit else TASKS
     print(f"共 {len(tasks)} 个任务，base={args.base}")
@@ -174,39 +176,61 @@ def main():
     # 预检查：自动路由没生效就直接退出，避免跑完 8 分钟才发现数据作废
     probe = ask(args.base, key, "把这句话翻译成英文：路由预检查。", auto_route=True)
     if not probe.get("ok"):
-        print(f"❌ 服务没起来或鉴权失败：{probe.get('error')}")
+        print(f"服务没起来或鉴权失败：" + str(probe.get("error")))
         return
     if not probe.get("routed_model"):
-        print("❌ 服务端的自动路由没有生效，本次结果无效。")
+        print("[失败] 服务端的自动路由没有生效，本次结果无效。")
         print("   检查：启动服务前是否设置了环境变量 AUTO_ROUTE=true")
         print("   Windows CMD 正确写法（注意不要写成一行加 &&，会带尾随空格）：")
         print("       set AUTO_ROUTE=true")
         print("       python run.py")
         return
-    print(f"✅ 自动路由已生效，预检查命中 {probe['routed_model']}")
+    print("[OK] 自动路由已生效，预检查命中 " + str(probe["routed_model"]))
 
-    off = run_mode(args.base, key, tasks, auto_route=False, usage_path=args.usage,
-                   force_model=args.baseline)
-    s_off = summarize(f"A 组：关闭路由（全部用 {args.baseline}）", off)
-    on = run_mode(args.base, key, tasks, auto_route=True, usage_path=args.usage)
-    s_on = summarize("B 组：开启路由（按档位选模型）", on)
+    off, on = None, None
+
+    if args.only in ("both", "a"):
+        off = run_mode(args.base, key, tasks, auto_route=False, usage_path=args.usage,
+                       force_model=args.baseline)
+        s_off = summarize(f"A 组：关闭路由（全部用 {args.baseline}）", off)
+    else:
+        s_off = None
+        print("\n（跳过 A 组，只跑 B 组）")
+
+    if args.only in ("both", "b"):
+        on = run_mode(args.base, key, tasks, auto_route=True, usage_path=args.usage)
+        s_on = summarize("B 组：开启路由（按档位选模型）", on)
+    else:
+        s_on = None
+        print("\n（跳过 B 组，只跑 A 组）")
 
     print("\n===== 结论 =====")
-    if s_off["cost"] > 0:
+    if s_off and s_on and s_off["cost"] > 0:
         drop = (s_off["cost"] - s_on["cost"]) / s_off["cost"] * 100
         print(f"成本：${s_off['cost']:.6f} -> ${s_on['cost']:.6f}   降幅 {drop:.1f}%")
-    print(f"平均延迟：{s_off['avg_ms']}ms -> {s_on['avg_ms']}ms")
+        print(f"平均延迟：{s_off['avg_ms']}ms -> {s_on['avg_ms']}ms")
+    elif s_on:
+        print(f"B 组成本 ${s_on['cost']:.6f}，平均延迟 {s_on['avg_ms']}ms")
+        print("（A 组被跳过，请与上一次 A 组的输出对比）")
     print("质量：需要人工打分或另接 judge 模型，脚本不自动评判")
 
-    # 把两组答案存下来，方便逐条对比打分
+    # 保存答案：只覆盖本次跑过的那一组，另一组沿用上次的
     try:
+        saved = {}
+        if os.path.exists(args.save):
+            try:
+                with open(args.save, encoding="utf-8") as f:
+                    saved = json.load(f)
+            except Exception:
+                saved = {}
+        if off is not None:
+            saved["A_no_route"] = [{"task": r["label"], "answer": r["answer"]} for r in off]
+        if on is not None:
+            saved["B_routed"] = [{"task": r["label"], "answer": r["answer"]} for r in on]
+        saved["baseline_model"] = args.baseline
         os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
         with open(args.save, "w", encoding="utf-8") as f:
-            json.dump({
-                "baseline_model": args.baseline,
-                "A_no_route": [{"task": r["label"], "answer": r["answer"]} for r in off],
-                "B_routed": [{"task": r["label"], "answer": r["answer"]} for r in on],
-            }, f, ensure_ascii=False, indent=2)
+            json.dump(saved, f, ensure_ascii=False, indent=2)
         print(f"两组答案已保存到 {args.save}")
     except Exception as e:
         print(f"保存答案失败：{e}")
