@@ -69,5 +69,10 @@ def extract_long_term_memory(messages: list, existing_memory: str = "") -> str:
         timeout=20,
         **extra
     )
-    new_memory = resp.choices[0].message.content.strip()
-    return new_memory if new_memory != "空" else existing_memory
+    # 有的模型（尤其是关闭思考的推理模型）会返回 content=None，
+    # 直接 .strip() 会抛 AttributeError，日志里刷一片「长期记忆更新失败」
+    content = resp.choices[0].message.content or ""
+    new_memory = content.strip()
+    if not new_memory or new_memory in ("空", "无", "None"):
+        return existing_memory
+    return new_memory

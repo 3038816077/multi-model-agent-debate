@@ -8,6 +8,29 @@ from app.core.config import get_model_extra_body
 from app.core.llm_factory import get_llm_client, get_model_name, get_llm_context, set_llm_context, friendly_llm_error
 from app.core.router import log_usage
 
+# 天气话题的关键词
+_WEATHER_TOPIC = ("天气", "气温", "温度", "下雨", "下雪", "刮风", "多少度", "几度")
+# 真正在「问天气」的迹象：疑问语气或明确的查询动作
+_WEATHER_ASK = ("查", "预报", "怎么样", "怎样", "如何", "冷不冷", "热不热",
+                "会不会", "有没有雨", "吗", "呢", "？", "?")
+
+
+def _is_weather_query(text: str) -> bool:
+    """只有真的在问天气才强制调工具。
+
+    以前只要句子里出现「天气」二字就强制 function calling，导致
+    「把这句话翻译成日文：今天天气不错」被逼着去调 get_weather，
+    参数还是空的，白白浪费一轮调用。
+    """
+    t = text or ""
+    if not any(k in t for k in _WEATHER_TOPIC):
+        return False
+    # 翻译 / 改写 / 摘要这类指令，主语是文本本身，不是在问天气
+    if any(k in t for k in ("翻译", "译成", "改写", "润色", "摘要", "总结", "提取")):
+        return False
+    return any(k in t for k in _WEATHER_ASK)
+
+
 def llm_node(state: State):
     messages = state["messages"]
     has_tool_result = any((m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) == "tool" for m in messages)
@@ -18,7 +41,7 @@ def llm_node(state: State):
             if (msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")) == "user":
                 last_user_content = msg.get("content", "")
                 break
-        if "天气" in last_user_content:
+        if _is_weather_query(last_user_content):
             tool_choice = "required"
             logger.info("[路由控制] 检测到首次天气查询，强制模型调用工具...")
 
