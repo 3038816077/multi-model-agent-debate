@@ -54,6 +54,7 @@
 | | 能力 | 说明 |
 | --- | --- | --- |
 | 🗣️ | **多模型研讨** | 主模型 + 任意数量副模型，三阶段交叉验证，可随时更换阵容 |
+| 🧭 | **模型分层路由** | 按任务复杂度自动挑档位：翻译/摘要走免费模型，代码/方案走强模型；默认关闭，带 `auto_route` 开关 |
 | 📄 | **文档问答** | 前端直接上传 `.docx` / `.pdf` / `.txt`，Word 用标准库解析（不额外装依赖），PDF 逐页抽取并标注页码；**单模型和研讨模式都支持** |
 | 🔍 | **三阶段 RAG** | Query 改写 → BM25 + FAISS 双路召回 → Cross-Encoder 精排，专治专有名词检索不到 |
 | ⚡ | **并发工具调用** | 一次问"北京、上海、厦门天气"，`ThreadPoolExecutor` 并发请求三个接口 |
@@ -192,6 +193,53 @@ HF_HUB_OFFLINE=1
 ```
 
 </details>
+
+## 🧭 模型分层路由（按任务挑模型）
+
+不是所有问题都值得用最贵的模型。开启后，请求会按任务复杂度自动选择档位：
+
+| 档位 | 典型任务 | 候选模型（取注册表里第一个存在的） |
+| --- | --- | --- |
+| `cheap` | 翻译、改写、格式化、摘要、短问答 | GLM-4-Flash、豆包 Seed Lite |
+| `mid` | 一般讨论、开放问答 | DeepSeek、Kimi |
+| `strong` | 代码、架构、方案设计、长文分析、带文档问答 | GPT-6.1、Claude Opus、GPT-6 |
+
+**刻意保守的地方**：天气、时间、联网搜索这类依赖 function calling 的请求**不接管**，
+继续用用户当前选的模型——弱模型调错工具参数的代价，比省下的那点钱大得多。
+
+### 开启方式
+
+```env
+AUTO_ROUTE=true
+USAGE_LOG_PATH=data/usage.jsonl
+```
+
+请求里带 `auto_route: true` 才生效；显式指定了模型的请求永远以用户选择为准：
+
+```bash
+curl -X POST http://127.0.0.1:8000/chat \
+  -H "Content-Type: application/json" -H "X-API-Key: my-secret-key-123" \
+  -d '{"message":"把这段话翻译成英文：你好","auto_route":true}'
+```
+
+响应里的 `routed_model` 会告诉你这一轮实际用了哪个模型。
+
+### 算账
+
+每次模型调用都会往 `data/usage.jsonl` 追加一行（tokens / 成本 / 延迟 / 档位），
+用它可以算出真实开销：
+
+```json
+{"trace_id":"0bd4e2e9","model":"glm-4-flash","tier":"cheap","prompt_tokens":1344,"completion_tokens":15,"latency_ms":2228,"cost_usd":0.0}
+```
+
+同一批任务分别跑「关路由」和「开路由」：
+
+```bash
+python scripts/benchmark_route.py --base http://127.0.0.1:8000
+```
+
+价格表在 [`app/core/router.py`](app/core/router.py) 的 `MODEL_PRICE_PER_M`，按自己的实际账单改。
 
 ## ❓ 常见问题
 

@@ -82,3 +82,10 @@ SEMANTIC_CHUNK_THRESHOLD = float(os.getenv("SEMANTIC_CHUNK_THRESHOLD", 0.85))  #
 # ========== Agent 执行配置 ==========
 MAX_TOOL_RETRY = int(os.getenv("MAX_TOOL_RETRY", 2))          # 工具最大错误重试次数
 MAX_CONCURRENT_TOOLS = int(os.getenv("MAX_CONCURRENT_TOOLS", 5)) # 线程池最大并发数
+
+# ========== 模型分层路由 ==========
+# 开启后，前端传 auto_route=true 的请求会按任务复杂度自动挑模型档位；
+# 关闭时行为与之前完全一致，不影响已有调用方。
+AUTO_ROUTE = os.getenv("AUTO_ROUTE", "false").lower() == "true"
+# 每次模型调用的用量记录（tokens / 成本 / 延迟），用于事后算账和对照实验
+USAGE_LOG_PATH = os.getenv("USAGE_LOG_PATH", "data/usage.jsonl")

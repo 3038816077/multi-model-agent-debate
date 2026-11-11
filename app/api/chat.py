@@ -10,8 +10,9 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body
+from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
+from app.core.router import classify, pick_model, set_current_tier
 from app.core.logger import logger, set_trace
 from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory
 from app.tools.calc import get_current_time, calculate_expression
@@ -32,6 +33,36 @@ def _model_extra(model_id: str) -> dict:
     """注册表里给该模型配了 extra_body 就带上（例如豆包 2.1 关掉深度思考）。"""
     extra = get_model_extra_body(model_id)
     return {"extra_body": extra} if extra else {}
+
+
+
+def _apply_auto_route(request_body):
+    """按任务复杂度自动挑模型。返回 {"tier","model"}；不接管时返回 None。
+
+    优先级：用户显式指定模型 > 自动路由 > 系统默认模型。
+    """
+    if not AUTO_ROUTE or not request_body.auto_route:
+        return None
+    if request_body.user_model_name or request_body.user_api_key:
+        return None
+
+    tier = classify(
+        request_body.message,
+        has_doc=bool(request_body.attachment_id),
+        web_search=bool(request_body.enable_web_search),
+    )
+    if not tier:
+        return None
+
+    model = pick_model(tier)
+    if not model:
+        logger.warning(f"[自动路由] 档位 {tier} 在注册表里没有可用模型，保持当前模型")
+        return None
+
+    set_llm_client(model_name=model)
+    set_current_tier(tier)
+    logger.info(f"[auto-route] tier={tier} model={model} len={len(request_body.message)}")
+    return {"tier": tier, "model": model}
 
 
 def _document_message(doc_id: str):
@@ -65,6 +96,8 @@ class ChatRequest(BaseModel):
     user_base_url: Optional[str] = None
     user_model_name: Optional[str] = None
     enable_web_search: Optional[bool] = False
+    # 前端传 true 才启用自动路由；显式选了模型时以用户选择为准
+    auto_route: Optional[bool] = False
 
 class GroupChatRequest(BaseModel):
     message: str
@@ -263,6 +296,8 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         logger.info(f"[模型切换] 目标模型: {request_body.user_model_name}, 自定义Key: {bool(request_body.user_api_key)}")
         set_llm_client(request_body.user_api_key, request_body.user_base_url, request_body.user_model_name)
 
+    routed = _apply_auto_route(request_body)
+
     session_id = request_body.session_id or str(uuid.uuid4())
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
     if not messages:
@@ -367,7 +402,7 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         except Exception as e:
             logger.warning(f"长期记忆更新失败：{str(e)}")
 
-        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process, "trace_id": current_trace_id}
+        return {"code": 200, "answer": final_answer, "session_id": session_id, "history_length": len(messages), "thought_process": thought_process, "trace_id": current_trace_id, "routed_model": (routed or {}).get("model")}
     except Exception as e:
         logger.error(f"对话接口异常：{str(e)}", exc_info=True)
         return {"code": 500, "error": str(e)}
@@ -394,6 +429,8 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
     if request_body.user_model_name or request_body.user_api_key:
         logger.info(f"[模型切换] 目标模型: {request_body.user_model_name}, 自定义Key: {bool(request_body.user_api_key)}")
         set_llm_client(request_body.user_api_key, request_body.user_base_url, request_body.user_model_name)
+
+    routed = _apply_auto_route(request_body)
 
     session_id = request_body.session_id or str(uuid.uuid4())
     messages = get_messages(db, session_id, limit=MAX_HISTORY_LENGTH)
@@ -441,6 +478,8 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
     async def event_generator():
         try:
             yield f"data: {json.dumps({'event': 'thinking', 'data': '正在思考...'})}\n\n"
+            if routed:
+                yield f"data: {json.dumps({'event': 'routed', 'data': routed})}\n\n"
             await asyncio.sleep(0.1)
 
             # 确定性快路径：时间 / 纯算术，不依赖大模型是否愿意调用工具
