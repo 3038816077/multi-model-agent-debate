@@ -27,3 +27,6 @@ hf_cache/
 .vscode/
 .idea/
 .DS_Store
+# 备份文件里可能带真实密钥，一律不入库
+*.bak
+.env.bak
