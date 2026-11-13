@@ -2,11 +2,9 @@
 
 # Multi-Model Agent Debate
 
-### 让多个大模型先各自作答，再互相挑错，最后由首席模型总结
+### Several LLMs answer on their own, critique each other, then a chief model writes the final answer
 
-<sub>Multi-model debate for LLMs — independent answers, cross-review, then a chief model synthesizes.</sub>
-
-一套开箱即用的**多模型研讨 Agent**：LangGraph 编排 · Hybrid RAG 检索（BM25 + FAISS + 精排）· Word / PDF 直接问答 · SSE 流式输出 · 多会话持久化
+<sub>A ready-to-run multi-model debate agent: LangGraph orchestration · Hybrid RAG (BM25 + FAISS + reranking) · direct Word / PDF Q&A · SSE streaming · persistent sessions</sub>
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)
@@ -14,181 +12,193 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 
-<sub><a href="#-快速开始">快速开始</a> · <a href="#-工作原理">工作原理</a> · <a href="#-功能一览">功能</a> · <a href="#-配置模型不用改代码">配置模型</a> · <a href="#-常见问题">常见问题</a> · <a href="#english">English</a></sub>
+<sub><b>English</b> · <a href="README.zh-CN.md">中文</a></sub>
+
+<sub><a href="#-quick-start">Quick start</a> · <a href="#-how-it-works">How it works</a> · <a href="#-features">Features</a> · <a href="#-configure-models-without-touching-code">Model config</a> · <a href="#-faq">FAQ</a></sub>
 
 </div>
 
 ---
 
-![界面预览](docs/preview.png)
+![UI preview](docs/preview.png)
 
-## 💡 为什么不是"再问一遍同一个模型"
+## 💡 Why not just ask the same model twice
 
-让一个模型检查自己的答案，效果很有限——**它很难推翻自己**。同一个模型、同一套权重、同一批偏见，复查十遍也是同一个盲区。
+Asking a model to check its own answer rarely works — **it can hardly overturn itself**. Same weights, same blind spots; re-reading it ten times lands on the same gap.
 
-这个项目换了个思路：
+This project takes a different route:
 
-> 让 GPT、Claude、Qwen、DeepSeek **同时回答**同一个问题，然后让它们**互相阅读对方的答案并挑错**，最后由一个首席模型汇总。
+> Let GPT, Claude, Qwen and DeepSeek **answer the same question at the same time**, then have them **read each other's answers and look for flaws**, and finally a chief model synthesizes the result.
 
-不同厂商、不同训练数据带来的分歧，恰好是最有价值的部分——分歧出现的地方，往往就是原答案最不可靠的地方。
+The disagreements that come from different vendors and different training data are the valuable part — wherever the answers diverge is usually where the original answer is least reliable.
 
 ```text
-用户提问
-   ├─ 第一轮：N 个专家模型并行独立作答（互不可见）
-   ├─ 第二轮：每个专家读到其他专家的观点，补充或反驳
-   └─ 第三轮：首席模型去伪存真，输出一份最终结论
+user question
+   ├─ round 1: N expert models answer independently (they cannot see each other)
+   ├─ round 2: each expert reads the others and adds to them or pushes back
+   └─ round 3: the chief model drops what is wrong and writes one final answer
 ```
 
-## 🔬 工作原理
+## 🔬 How it works
 
-![工作流程](docs/debate-flow.svg)
+![workflow](docs/debate-flow.svg)
 
-| 阶段 | 做什么 | 关键点 |
+| Stage | What happens | Why it matters |
 | --- | --- | --- |
-| 第一轮 · 独立作答 | 所有副模型并行回答，彼此看不到对方 | 保证观点的**独立性**，避免互相抄 |
-| 第二轮 · 交叉研讨 | 每个模型读到其他模型的答案，指出漏洞或补充 | 暴露单模型的**认知盲区** |
-| 第三轮 · 首席总结 | 主模型综合所有观点，剔除错误信息 | 输出**一份**结构化的最终结论 |
+| Round 1 · independent answers | All staff models answer in parallel, blind to each other | Keeps the views **independent**, so nobody copies a neighbour |
+| Round 2 · cross-review | Each model reads the others and points out holes or adds detail | Surfaces each single model's **blind spot** |
+| Round 3 · chief summary | The chief model merges everything and removes what is wrong | Produces **one** structured final answer |
 
-三个阶段的内容按轮次分块独立渲染，**后一轮不会顶掉前一轮**；整个研讨过程通过 SSE 实时推送到浏览器，刷新页面后从数据库完整还原（专家头像、模型名、每轮气泡都在）。
+Each round is rendered as its own block, **a later round never overwrites an earlier one**. The whole debate streams to the browser over SSE, and a page refresh restores it completely from the database (avatars, model names, every bubble).
 
-## ✨ 功能一览
+### Two ways to run the panel
 
-| | 能力 | 说明 |
+| Mode | What it does | When to use it |
 | --- | --- | --- |
-| 🗣️ | **多模型研讨** | 主模型 + 任意数量副模型，三阶段交叉验证，可随时更换阵容 |
-| 🧭 | **模型分层路由** | 按任务复杂度自动挑档位：翻译/摘要走免费模型，代码/方案走强模型；默认关闭，带 `auto_route` 开关。**实测 16 个任务省 13.6%，质量降 3.8%** |
-| 📄 | **文档问答** | 前端直接上传 `.docx` / `.pdf` / `.txt`，Word 用标准库解析（不额外装依赖），PDF 逐页抽取并标注页码；**单模型和研讨模式都支持** |
-| 🔍 | **三阶段 RAG** | Query 改写 → BM25 + FAISS 双路召回 → Cross-Encoder 精排，专治专有名词检索不到 |
-| ⚡ | **并发工具调用** | 一次问"北京、上海、厦门天气"，`ThreadPoolExecutor` 并发请求三个接口 |
-| 🧠 | **意图前置路由** | 时间/计算等确定性场景走后端兜底，不依赖模型自觉调工具 |
-| 🌐 | **联网搜索** | 集成博查搜索，可强制开启，也可由模型自主判断是否联网 |
-| 🔐 | **无状态多模型透传** | 前端填自己的 API Key 即可切换厂商，`contextvars` 请求级隔离，服务端零存储 |
-| 💻 | **SSE 流式体验** | 思考链路 + 最终回答双通道打字机输出，支持实时中断 |
-| 📊 | **全链路 Trace** | 每个请求一个 Trace ID，线程池里的日志也不会丢 |
-| 🛡️ | **鉴权与限流** | API Key 校验 + SlowAPI 单 IP 限流 + 工具错误自愈重试 |
+| **Debate** (default) | Independent answers → cross-review → chief summary | You want one answer you can trust |
+| **Parallel compare** | Independent answers only, then a cheap model extracts **consensus / disagreements / one-offs** | You want to see *where the models disagree* — and it costs far less |
 
-内置 10 个模型可直接使用：通义千问、DeepSeek、智谱 GLM、Kimi、豆包 Seed、GPT-5.6、GPT-6、GPT-6.1、Claude Sonnet 4.6、Claude Opus 4.6。
+Parallel compare skips the review and summary rounds entirely: about **40% fewer model calls** than a full debate.
 
-## 🚀 快速开始
+## ✨ Features
 
-### 1. 安装依赖
+| | Capability | Description |
+| --- | --- | --- |
+| 🗣️ | **Multi-model debate** | One chief model + any number of staff models, three-stage cross-validation, line-up can be changed at any time |
+| ⚡ | **Parallel compare** | Only round 1 (independent answers, no cross-review), then a cheap model extracts **consensus / disagreements / one-offs**; ~40% fewer model calls than a full debate |
+| 🧭 | **Tiered model routing** | Picks a tier from task complexity: translation and summaries go to free models, code and design go to strong ones. Off by default, behind an `auto_route` flag. **Measured on 16 tasks: 13.6% cheaper, 3.8% quality drop** |
+| 📄 | **Document Q&A** | Upload `.docx` / `.pdf` / `.txt` from the UI; Word is parsed with the standard library (no extra dependency), PDF is extracted page by page with page numbers. **Works in both single-model and debate mode** |
+| 🔍 | **Three-stage RAG** | Query rewrite → BM25 + FAISS dual recall → Cross-Encoder rerank, aimed at proper nouns that plain vector search misses |
+| ⚡ | **Parallel tool calls** | Ask "weather in Beijing, Shanghai and Xiamen" and three endpoints are hit concurrently via `ThreadPoolExecutor` |
+| 🧠 | **Intent routing up front** | Deterministic cases (time, arithmetic) are handled by the backend instead of hoping the model decides to call a tool |
+| 🌐 | **Web search** | Bocha search integration, either forced on or left to the model's judgement |
+| 🔐 | **Stateless multi-model passthrough** | Users bring their own API keys; request-level isolation via `contextvars`, nothing stored server-side |
+| 💻 | **SSE streaming** | Dual-channel typewriter output (reasoning + answer), with live interruption |
+| 📊 | **End-to-end tracing** | One trace ID per request, surviving the thread pool |
+| 🛡️ | **Auth and rate limiting** | API key check + SlowAPI per-IP limits + self-healing retries on tool errors |
+
+Ten models ship with the registry: Qwen, DeepSeek, Zhipu GLM, Kimi, Doubao Seed, GPT-5.6, GPT-6, GPT-6.1, Claude Sonnet 4.6, Claude Opus 4.6.
+
+## 🚀 Quick start
+
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置密钥
+### 2. Configure keys
 
-把根目录的 `env.txt` 复制成 `.env`，把里面 `sk-REPLACE_ME` 换成你自己的 Key。**只想先跑起来的话，配一个模型就够了**：
+Copy `env.txt` to `.env` and replace `sk-REPLACE_ME` with your own key. **One model is enough to get started**:
 
 ```env
-MODEL_REGISTRY={"qwen-plus":{"base_url":"https://dashscope.aliyuncs.com/compatible-mode/v1","api_key":"sk-你的key","vendor":"阿里","label":"通义千问 Plus"}}
+MODEL_REGISTRY={"qwen-plus":{"base_url":"https://dashscope.aliyuncs.com/compatible-mode/v1","api_key":"sk-your-key","vendor":"Alibaba","label":"Qwen Plus"}}
 DEFAULT_MODEL_ID=qwen-plus
 API_KEY=my-secret-key-123
 ```
 
-### 3. 启动
+### 3. Start it
 
 ```bash
 python run.py
 ```
 
-或者用 Docker（多阶段构建，一条命令）：
+Or with Docker (multi-stage build, one command):
 
 ```bash
 docker compose up -d --build
 ```
 
-### 4. 打开页面
+### 4. Open the UI
 
-- 前端：<http://127.0.0.1:8000>
-- 接口文档：<http://127.0.0.1:8000/docs>
+- Front end: <http://127.0.0.1:8000>
+- API docs: <http://127.0.0.1:8000/docs>
 
-> 首次启动会下载 Embedding 和 Reranker 模型（约 400MB），需要几分钟；之后是秒级冷启动。
+> The first start downloads the embedding and reranker models (~400MB) and takes a few minutes; after that cold start is seconds.
 
-## 🔌 配置模型（不用改代码）
+## 🔌 Configure models without touching code
 
-所有模型都来自 `.env` 里的 `MODEL_REGISTRY`——**一段单行 JSON**。想加一个模型，往里追加一段就行：
+Every model comes from `MODEL_REGISTRY` in `.env` — **a single line of JSON**. To add one, append an entry:
 
 ```json
 "doubao-seed-2-1-lite":{
   "base_url":"https://ark.cn-beijing.volces.com/api/v3",
-  "api_key":"你的火山方舟 ARK_API_KEY",
-  "vendor":"字节跳动",
-  "label":"豆包 Seed 2.1 Lite",
+  "api_key":"your Volcengine Ark key",
+  "vendor":"ByteDance",
+  "label":"Doubao Seed 2.1 Lite",
   "model":"doubao-seed-2-1-lite-260915",
   "extra_body":{"thinking":{"type":"disabled"}}
 }
 ```
 
-重启后，下拉框和多模型研讨的模型列表里就会自动出现，**不需要改任何后端代码**。
+Restart and it shows up in the dropdown and in the debate line-up — **no backend code changes**.
 
-- `model`（可选）：真正发给厂商的模型 ID。不写的话，registry 里的 key 会直接当模型名用。
-- `extra_body`（可选）：原样追加到请求体。上面的例子里，豆包 Seed 2.1 默认开启**深度思考**，一次简单问答要 20~60 秒甚至直接超时；关掉之后同样的问题 1~2 秒返回。
-- 想让它默认被选中：改 `static/index.html` 里的 `DEFAULT_MODEL_ID`。
+- `model` (optional): the real model ID sent to the vendor. If omitted, the registry key is used as the model name.
+- `extra_body` (optional): appended to the request body verbatim. In the example above Doubao Seed 2.1 enables **deep thinking** by default, which turns one simple question into 20–60 seconds or a timeout; disabling it brings the same question down to 1–2 seconds.
+- To make a model the default selection, edit `DEFAULT_MODEL_ID` in `static/index.html`.
 
-只要厂商兼容 OpenAI 协议（`/chat/completions` + `tools`），就能接进来——OpenAI、Anthropic 中转、DeepSeek、Kimi、智谱、通义、火山方舟都验证过。
+Anything that speaks the OpenAI API (`/chat/completions` + `tools`) can be plugged in — OpenAI, Anthropic proxies, DeepSeek, Kimi, Zhipu, Qwen and Volcengine Ark are all verified.
 
 <details>
-<summary><b>🛠 技术栈</b></summary>
+<summary><b>🛠 Tech stack</b></summary>
 
-- **核心框架**：FastAPI + Uvicorn + SQLAlchemy
-- **Agent 编排**：LangGraph (StateGraph) + ReAct + ThreadPoolExecutor 并发
-- **RAG**：FAISS + BM25 + Jieba + HuggingFace Embedding + BAAI/bge-reranker 精排
-- **联网搜索**：Bocha AI Web Search API
-- **安全**：SlowAPI 限流 + 自定义 API Key 鉴权 + SSRF 白名单
-- **存储**：SQLite（WAL 模式）+ 内存缓存
-- **前端**：原生 HTML/JS + SSE 流式渲染，零构建步骤
-- **部署**：Docker 多阶段构建 + Docker Compose
+- **Framework**: FastAPI + Uvicorn + SQLAlchemy
+- **Agent orchestration**: LangGraph (StateGraph) + ReAct + `ThreadPoolExecutor` concurrency
+- **RAG**: FAISS + BM25 + Jieba + HuggingFace embeddings + BAAI/bge-reranker
+- **Web search**: Bocha AI Web Search API
+- **Security**: SlowAPI rate limits + custom API key auth + SSRF allowlist
+- **Storage**: SQLite (WAL mode) + in-memory cache
+- **Front end**: plain HTML/JS with SSE rendering, no build step
+- **Deployment**: multi-stage Docker build + Docker Compose
 
 </details>
 
 <details>
-<summary><b>📁 项目结构</b></summary>
+<summary><b>📁 Project layout</b></summary>
 
 ```text
 multi-model-agent-debate/
 ├── app/
-│   ├── api/          # 路由层：鉴权、意图拦截、流式接口、多会话查询
-│   ├── agent/        # 核心层：LangGraph 状态机、LLM 节点、并发 Tool 节点
-│   ├── core/         # 基础层：配置、Trace 日志、LLM 工厂、错误翻译
-│   ├── db/           # 数据层：SQLite 模型、CRUD、向量库（FAISS + BM25 + 精排）
-│   ├── middleware/   # 中间件：API Key 鉴权与 IP 限流
-│   └── tools/        # 工具层：天气、计算、时间、RAG 检索、联网搜索、文档解析
-├── knowledge/        # 本地知识库（.txt / .md / .pdf）
-├── static/           # 前端页面（多会话 + 流式打字机 + 文档上传）
-├── docs/             # README 用的图
+│   ├── api/          # routes: auth, intent interception, streaming, session queries
+│   ├── agent/        # core: LangGraph state machine, LLM nodes, concurrent tool nodes
+│   ├── core/         # foundation: config, trace logging, LLM factory, error translation
+│   ├── db/           # data: SQLite models, CRUD, vector store (FAISS + BM25 + rerank)
+│   ├── middleware/   # API key auth and per-IP rate limiting
+│   └── tools/        # tools: weather, calculator, time, RAG retrieval, web search, doc parsing
+├── knowledge/        # local knowledge base (.txt / .md / .pdf)
+├── static/           # front end (sessions + typewriter streaming + document upload)
+├── docs/             # images used by this README
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
-└── run.py            # 启动入口
+└── run.py            # entry point
 ```
 
 </details>
 
 <details>
-<summary><b>🧩 几个值得一看的实现细节</b></summary>
+<summary><b>🧩 Implementation details worth a look</b></summary>
 
-**意图前置路由**：时间、计算这类确定性场景，先用正则拦截并直接调用后端工具，不让模型去猜"该不该调工具"；同时在 LLM 节点动态切换 `tool_choice`（首次 `required` 强制，二次 `auto` 放开），既解决"幻觉不调工具"，也解决"工具无限死循环"。
+**Intent routing up front.** Deterministic cases such as time and arithmetic are intercepted with a regex and answered by a backend tool, so the model never has to guess whether to call one. The LLM node also flips `tool_choice` dynamically (`required` on the first pass, `auto` afterwards), which fixes both "the model hallucinates instead of calling a tool" and "the tool loop never ends".
 
-**两阶段混合检索**：Query 改写把口语化提问压成检索关键词 → BM25 + FAISS 双路召回 → RRF 融合 → Cross-Encoder 对 Top10 精排 → 取 Top3 送进上下文，专门对付专有名词召回率低和"中间迷失"。
+**Two-stage hybrid retrieval.** Query rewrite compresses a conversational question into search keywords → BM25 + FAISS dual recall → RRF fusion → Cross-Encoder reranks the top 10 → the top 3 go into context. This is aimed at low recall on proper nouns and at losing information in the middle of a long context.
 
-**工具错误自愈**：工具抛错时不直接失败，而是把错误信息回流给模型，引导它修正参数重试（最多 2 次）。
+**Self-healing tool errors.** A failing tool does not abort the request: the error text flows back to the model so it can fix its arguments and retry (up to twice).
 
-**并发下的上下文**：`contextvars` 存 Trace ID 和 LLM 客户端，线程池里再包一层上下文传递，保证并发调用时日志和密钥不会串。
+**Context under concurrency.** Trace ID and LLM client live in `contextvars`, with the context handed into the thread pool, so concurrent calls never mix up logs or keys.
 
 </details>
 
 <details>
-<summary><b>⚠️ 下载模型卡住怎么办（国内网络）</b></summary>
+<summary><b>⚠️ Model download hangs (mainland China)</b></summary>
 
-首次启动会从 HuggingFace 拉取 `all-MiniLM-L6-v2` 和 `bge-reranker-base`。如果卡在"正在加载向量模型"，用镜像：
+The first start pulls `all-MiniLM-L6-v2` and `bge-reranker-base` from HuggingFace. If it stalls at "loading embedding model", use a mirror:
 
 ```env
 HF_ENDPOINT=https://hf-mirror.com
 ```
 
-已经下载过的话，直接离线运行：
+Already downloaded? Run fully offline:
 
 ```env
 HF_HUB_OFFLINE=1
@@ -196,110 +206,83 @@ HF_HUB_OFFLINE=1
 
 </details>
 
-## 🧭 模型分层路由（按任务挑模型）
+## 🧭 Tiered model routing
 
-不是所有问题都值得用最贵的模型。开启后，请求会按任务复杂度自动选择档位：
+Not every question deserves the most expensive model. With routing on, each request picks a tier from task complexity:
 
-| 档位 | 典型任务 | 候选模型（取注册表里第一个存在的） |
+| Tier | Typical tasks | Candidates (first one present in the registry wins) |
 | --- | --- | --- |
-| `cheap` | 翻译、改写、格式化、摘要、短问答 | GLM-4-Flash、豆包 Seed Lite |
-| `mid` | 一般讨论、开放问答 | DeepSeek、Kimi |
-| `strong` | 代码、架构、方案设计、长文分析、带文档问答 | GPT-6.1、Claude Opus、GPT-6 |
+| `cheap` | Translation, rewriting, formatting, summaries, short Q&A | GLM-4-Flash, Doubao Seed Lite |
+| `mid` | General discussion, open questions | DeepSeek, Kimi |
+| `strong` | Code, architecture, solution design, long analysis, document Q&A | GPT-6.1, Claude Opus, GPT-6 |
 
-**刻意保守的地方**：天气、时间、联网搜索这类依赖 function calling 的请求**不接管**，
-继续用用户当前选的模型——弱模型调错工具参数的代价，比省下的那点钱大得多。
+**Where it deliberately stays out of the way**: requests that depend on function calling — weather, time, web search — are **not** taken over; they keep the model the user selected. A weak model calling a tool with the wrong arguments costs far more than the money saved.
 
-### 开启方式
+### Enabling it
 
 ```env
 AUTO_ROUTE=true
 USAGE_LOG_PATH=data/usage.jsonl
 ```
 
-请求里带 `auto_route: true` 才生效；显式指定了模型的请求永远以用户选择为准：
+It only applies when the request carries `auto_route: true`; a request that names a model explicitly always wins:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" -H "X-API-Key: my-secret-key-123" \
-  -d '{"message":"把这段话翻译成英文：你好","auto_route":true}'
+  -d '{"message":"Translate into English: 你好","auto_route":true}'
 ```
 
-响应里的 `routed_model` 会告诉你这一轮实际用了哪个模型。
+The `routed_model` field in the response tells you which model actually ran.
 
-### 算账
+### Keeping score
 
-每次模型调用都会往 `data/usage.jsonl` 追加一行（tokens / 成本 / 延迟 / 档位），
-用它可以算出真实开销：
+Every model call appends one line to `data/usage.jsonl` (tokens / cost / latency / tier), which is enough to compute real spend:
 
 ```json
 {"trace_id":"0bd4e2e9","model":"glm-4-flash","tier":"cheap","prompt_tokens":1344,"completion_tokens":15,"latency_ms":2228,"cost_usd":0.0}
 ```
 
-同一批任务分别跑「关路由」和「开路由」：
+Run the same task batch with routing off and on:
 
 ```bash
 python scripts/benchmark_route.py --base http://127.0.0.1:8000
 ```
 
-### 实测结果
+### Measured results
 
-同一批 16 个任务，A 组全部用 `gpt-6.1-sol`，B 组开启路由：
+16 identical tasks; group A always uses `gpt-6.1-sol`, group B has routing on:
 
-| 指标 | 全部用强模型 | 开启路由 | 变化 |
+| Metric | Always the strong model | Routing on | Change |
 | --- | --- | --- | --- |
-| 16 个任务总成本 | \$0.2217 | \$0.1915 | **−13.6%** |
-| 平均质量打分（10 分制） | 8.25 | 7.94 | −3.8% |
-| 走免费模型的任务 | 0 | 7 / 16 | — |
-| 强模型任务占总成本 | 100% | **81.7%** | — |
+| Total cost, 16 tasks | $0.2217 | $0.1915 | **−13.6%** |
+| Mean quality score (0–10) | 8.25 | 7.94 | −3.8% |
+| Tasks on a free model | 0 | 7 / 16 | — |
+| Cost share of strong-model tasks | 100% | **81.7%** | — |
 
-**结论比降幅本身更重要**：7 条简单任务占了请求数的 44%，却只占总成本的 **12.6%**。
-真正烧钱的 7 条强模型任务（架构、长文、方案、代码……）路由一分钱也省不了。
+**The conclusion matters more than the percentage**: seven simple tasks are 44% of all requests but only **12.6%** of total cost. The seven expensive tasks (architecture, long-form, solution design, code…) cannot be cut by routing at all.
 
-> 降本的上限由 **token 结构**决定，不由**请求数量**决定。
-> 想真省钱，不是换更便宜的模型，而是让强模型少写废话。
+> The ceiling on savings is set by **token structure**, not by **request count**.
+> Saving real money is not about swapping in a cheaper model, it is about making the strong model write less.
 
-质量损失也很集中：16 条里 13 条完全持平，掉分的是翻译成日文（弱模型出现中日混写）、
-闲聊和改写各差 1 分。**风险是集中的，不是均匀分布的**——所以按任务类型开关，
-比全局一把梭更实用。
+The quality loss is concentrated too: 13 of 16 tasks are identical, and the ones that dropped are a Japanese translation (the weak model mixed in Chinese characters), small talk and rewriting, by one point each. **Risk clusters, it does not spread evenly** — which is why a per-task-type switch beats a global one.
 
-价格表在 [`app/core/router.py`](app/core/router.py) 的 `MODEL_PRICE_PER_M`，按自己的实际账单改。
+The price table lives in `MODEL_PRICE_PER_M` in [`app/core/router.py`](app/core/router.py); adjust it to your own invoice.
 
-## ❓ 常见问题
+## ❓ FAQ
 
-**Q：豆包/思考类模型很慢，老是超时？**
-在 registry 里加 `"extra_body":{"thinking":{"type":"disabled"}}` 关掉深度思考，或者把 `.env` 里的 `LLM_TIMEOUT` 调大（默认 60 秒）。
+**Q: Doubao and other thinking models are slow and keep timing out.**
+Add `"extra_body":{"thinking":{"type":"disabled"}}` to the registry entry to turn deep thinking off, or raise `LLM_TIMEOUT` in `.env` (default 60 seconds).
 
-**Q：研讨模式点了没反应 / 历史记录里只剩一段文字？**
-研讨过程会逐条写库（每条发言单独一行），刷新或切换会话都能还原成专家气泡。**这次改动之前产生的旧会话仍是拼接文本**，属于历史数据格式差异。
+**Q: Debate mode does nothing, or history shows one blob of text.**
+Each debate utterance is written to the database as its own row, so a refresh or a session switch restores the expert bubbles. **Sessions created before that change are still concatenated text** — that is a historical data-format difference.
 
-**Q：`python-multipart` 装不上，上传功能还能用吗？**
-能。文档上传走的是 base64 JSON 通道，不依赖 `python-multipart`。
+**Q: `python-multipart` will not install — is upload broken?**
+No. Document upload goes through a base64 JSON channel and does not need `python-multipart`.
 
-**Q：能不能只用本地模型？**
-只要它兼容 OpenAI 协议（vLLM、Ollama、LM Studio 都行），在 registry 里把 `base_url` 指过去即可。
+**Q: Can I use local models only?**
+Yes. As long as it speaks the OpenAI API (vLLM, Ollama, LM Studio all do), point `base_url` at it in the registry.
 
 ## 📄 License
 
 [MIT](LICENSE) © 2026
-
----
-
-<a id="english"></a>
-
-## English
-
-**Multi-Model Agent Debate** — a LangGraph + FastAPI agent where several LLMs answer independently, cross-review each other's answers, and a chief model synthesizes the final response.
-
-- 🗣️ Debate mode: Round 1 independent answers → Round 2 cross-critique → Round 3 chief summary
-- 📄 Ask questions about your `.docx` / `.pdf` (works in both single-model and debate mode)
-- 🔍 Hybrid RAG: query rewrite → BM25 + FAISS → Cross-Encoder rerank
-- ⚡ Parallel tool calling, SSE streaming, multi-session persistence
-- 🔌 Add any OpenAI-compatible model by editing one JSON line — no code changes
-
-```bash
-cp env.txt .env   # fill in your API keys
-pip install -r requirements.txt
-python run.py     # http://127.0.0.1:8000
-```
-
-</div>
