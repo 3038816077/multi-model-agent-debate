@@ -1,4 +1,4 @@
-import copy, uuid, re
+import copy, uuid, re, time
 import asyncio
 import json
 from fastapi import APIRouter, Depends, Request
@@ -12,7 +12,7 @@ import app.tools.knowledge
 import app.tools.web_search
 from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
-from app.core.router import classify, pick_model, set_current_tier
+from app.core.router import classify, pick_model, set_current_tier, log_usage, TIER_CHEAP
 from app.core.logger import logger, set_trace
 from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory
 from app.tools.calc import get_current_time, calculate_expression
@@ -33,6 +33,20 @@ def _model_extra(model_id: str) -> dict:
     """注册表里给该模型配了 extra_body 就带上（例如豆包 2.1 关掉深度思考）。"""
     extra = get_model_extra_body(model_id)
     return {"extra_body": extra} if extra else {}
+
+
+def _log_resp(resp, model_id: str, trace_id: str, started_at: float) -> None:
+    """把一次模型调用的用量记进 usage.jsonl；失败不影响主流程。"""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return
+    log_usage(
+        trace_id=trace_id,
+        model=model_id,
+        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        latency_ms=int((time.time() - started_at) * 1000),
+    )
 
 
 
@@ -110,6 +124,9 @@ class GroupChatRequest(BaseModel):
     attachment_id: Optional[str] = None
     chief_model: str
     staff_models: List[str]
+    # debate  = 独立作答 → 交叉互评 → 首席总结（默认，质量最高）
+    # parallel = 只并行作答 → 自动提取共识与分歧（快、省，不做互评）
+    mode: str = "debate"
 
 def get_db():
     db = SessionLocal()
@@ -569,12 +586,78 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+# ---------------- 并行模式的“分歧分析” ----------------
+# 并行模式只做第一轮（各家独立作答），不再互评。
+# 但用户真正想知道的是“这几份答案到底一不一样”，
+# 所以额外用便宜模型做一次比对，输出共识 / 分歧 / 孤例三段。
+# 这一次调用很便宜（cheap 档），比跑完整研讨省得多。
+
+DIVERGENCE_ANSWER_MAX_CHARS = 1500   # 单份回答截断，避免 prompt 过长
+
+GROUP_DIVERGENCE_PROMPT = """下面是 {n} 个模型对同一个问题的独立回答，请对比它们的异同。
+
+问题：{query}
+
+{answers}
+
+请严格按下面三段输出，不要复述原文，也不要评价哪个模型更好：
+
+【共识】所有回答都同意、且互不矛盾的关键结论；如果没有任何共识就写“无”
+【分歧】明显不同的判断，写明各自立场（用 回答1 / 回答2 指代）
+【孤例】只有一方提到、其他回答无法佐证的结论（可能是幻觉，值得核实）
+
+每段不超过 100 字，全文不超过 300 字。"""
+
+
+async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
+                             fallback_model: str = "") -> str:
+    """用便宜模型比对多份独立回答，挑出共识、分歧和孤例。"""
+    if not answers:
+        return ""
+    judge = pick_model(TIER_CHEAP) or fallback_model
+    if not judge:
+        return "（当前注册表里没有可用的便宜模型，跳过分歧分析）"
+
+    def sync_call():
+        started = time.time()
+        try:
+            client = get_client_for_model(judge)
+            body = "\n\n".join(
+                "【回答%d】\n%s" % (i + 1, (ans or "")[:DIVERGENCE_ANSWER_MAX_CHARS])
+                for i, ans in enumerate(answers.values())
+            )
+            prompt = GROUP_DIVERGENCE_PROMPT.format(n=len(answers), query=query, answers=body)
+            resp = client.chat.completions.create(
+                model=resolve_model_id(judge),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+                **_model_extra(judge),
+            )
+            _log_resp(resp, judge, trace_id, started)
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            logger.warning(f"【并行模式】分歧分析失败：{e}")
+            return "分歧分析失败：" + friendly_llm_error(e, judge)
+
+    return await asyncio.to_thread(sync_call)
+
+
 # ==================== 3. 多模型研讨流式接口 ====================
 @router.post("/chat/group_stream", summary="多模型研讨流式接口")
 @limiter.limit("10/minute")
 async def chat_group_stream(request: Request, request_body: GroupChatRequest, db: Session = Depends(get_db)):
     current_trace_id = set_trace()
-    logger.info(f"【研讨模式启动】主模型:{request_body.chief_model}, 副模型:{request_body.staff_models}")
+    # 日志里同时给出 label 和 key：key 是注册表标识，label 才是人看的模型名
+    _reg = get_model_registry()
+
+    def _tag(name: str) -> str:
+        label = (_reg.get(name) or {}).get("label")
+        return f"{label}({name})" if label and label != name else name
+
+    logger.info(
+        f"【研讨模式启动】主模型:{_tag(request_body.chief_model)}, "
+        f"副模型:{[_tag(m) for m in request_body.staff_models]}"
+    )
     
     session_id = request_body.session_id or str(uuid.uuid4())
     save_message(db, session_id, "user", request_body.message)
@@ -625,12 +708,14 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                     try:
                         client = get_client_for_model(model_name)
                         prompt = f"你是一名专家，请针对以下问题，给出你独立、专业的见解。\n问题：{state['query']}"
+                        _t0 = time.time()
                         resp = client.chat.completions.create(
                             model=resolve_model_id(model_name),
                             messages=[{"role": "user", "content": prompt}],
                             max_tokens=2048,
                             **_model_extra(model_name)
                         )
+                        _log_resp(resp, model_name, current_trace_id, _t0)
                         return model_name, resp.choices[0].message.content
                     except Exception as e:
                         return model_name, friendly_llm_error(e, model_name)
@@ -644,6 +729,32 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
 
             if not state["first_round"]:
                 yield f"data: {json.dumps({'event': 'error', 'data': '所有副模型均失败，无法继续。'})}\n\n"
+                return
+
+            # ---------------- 并行模式：只作答，不互评 ----------------
+            # 走到这里说明第一轮已经全部返回。直接做分歧分析然后收尾，
+            # 后面的第二轮、首席总结整段跳过。
+            if (request_body.mode or "debate").strip().lower() == "parallel":
+                valid_answers = {
+                    m: a for m, a in state["first_round"].items()
+                    if a and len(a) > 50      # 过滤掉失败时写入的错误文案
+                }
+                if not valid_answers:
+                    yield f"data: {json.dumps({'event': 'error', 'data': '没有可用的回答，无法生成分歧分析。'}, ensure_ascii=False)}\n\n"
+                    return
+
+                yield f"data: {json.dumps({'event': 'stage', 'data': '分歧分析'}, ensure_ascii=False)}\n\n"
+                divergence = await analyze_divergence(
+                    state["query"], valid_answers, current_trace_id, request_body.chief_model
+                )
+                yield f"data: {json.dumps({'event': 'divergence', 'content': divergence}, ensure_ascii=False)}\n\n"
+
+                for m, ans in state["first_round"].items():
+                    save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:1:{m}")
+                save_message(db, session_id, "assistant", divergence or "",
+                             f"GROUP_DIVERGENCE:{request_body.chief_model}")
+
+                yield f"data: {json.dumps({'event': 'done', 'session_id': session_id})}\n\n"
                 return
 
             # ---------------- 阶段二：第二轮交叉讨论 ----------------
@@ -660,12 +771,14 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                             if m != model_name:
                                 context_str += f"【{m} 的观点】：\n{ans}\n\n"
                         prompt = f"针对问题：{state['query']}\n\n其他专家的第一轮观点如下：\n{context_str}\n\n请你基于以上信息，发表你的补充意见，或者指出他们可能存在的漏洞。请保持专业客观。"
+                        _t0 = time.time()
                         resp = client.chat.completions.create(
                             model=resolve_model_id(model_name),
                             messages=[{"role": "user", "content": prompt}],
                             max_tokens=2048,
                             **_model_extra(model_name)
                         )
+                        _log_resp(resp, model_name, current_trace_id, _t0)
                         return model_name, resp.choices[0].message.content
                     except Exception as e:
                         return model_name, friendly_llm_error(e, model_name)
@@ -693,12 +806,14 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                         prompt += f"[{m}]: {ans}\n"
                     prompt += "\n作为首席总结官，请你综合以上所有专家的意见，去粗取精，剔除错误信息，给用户输出一份逻辑清晰、结构完整的最终回答。不要提及具体专家的名字，直接以最终结论的形式输出。请使用 Markdown 格式。"
 
+                    _t0 = time.time()
                     resp = client.chat.completions.create(
                         model=resolve_model_id(request_body.chief_model),
                         messages=[{"role": "user", "content": prompt}],
                         max_tokens=2048,
                         **_model_extra(request_body.chief_model)
                     )
+                    _log_resp(resp, request_body.chief_model, current_trace_id, _t0)
                     return resp.choices[0].message.content
                 except Exception as e:
                     return "总结失败: " + friendly_llm_error(e, request_body.chief_model)

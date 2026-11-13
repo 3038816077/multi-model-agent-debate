@@ -416,6 +416,13 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         <label>👥 研讨专家模型 (副模型，选2-3个)</label>
                         <div id="staffModelsCheckboxes" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
+                    <div class="setup-group">
+                        <label>⚙️ 运行模式</label>
+                        <select id="groupModeSelect">
+                            <option value="debate" selected>研讨：独立作答 → 交叉互评 → 首席总结（质量优先）</option>
+                            <option value="parallel">并行对比：只作答 → 自动找共识与分歧（速度优先）</option>
+                        </select>
+                    </div>
                     <div class="setup-tips">提示：主模型不可与副模型重复。配置发送首条消息后将锁定。</div>
                     <button class="start-btn" onclick="startGroupChatSession()">开始研讨</button>
                 </div>
@@ -754,7 +761,8 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 return;
             }
 
-            groupConfig = { chief: chiefModel, staffs: staffModels };
+            const groupMode = (document.getElementById('groupModeSelect') || {}).value || 'debate';
+            groupConfig = { chief: chiefModel, staffs: staffModels, mode: groupMode };
             updateLayoutForMode();
             chatMessages.innerHTML = `<div class="message ai">✅ 研讨配置完成。主模型: ${chiefModel} | 副模型: ${staffModels.join(', ')}。<br>请在下方输入您的议题，开始研讨。</div>`;
             userInput.focus();
@@ -920,7 +928,8 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         chief_model: groupConfig.chief,
                         staff_models: groupConfig.staffs,
                         session_id: sessionId,
-                        attachment_id: docId
+                        attachment_id: docId,
+                        mode: (groupConfig && groupConfig.mode) || 'debate'
                     }),
                     signal: currentAbortController.signal
                 });
@@ -978,6 +987,16 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         else if (payload.event === 'summary') {
                             const targetDiv = ensureSummary(payload.model);
                             typewriterEffect(targetDiv, payload.content || '');
+                        }
+                        else if (payload.event === 'divergence') {
+                            if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
+                            const wrap = document.createElement('div');
+                            wrap.className = 'summary-msg';
+                            wrap.innerHTML = '<div class="summary-title">🔍 共识与分歧（自动分析）</div>' +
+                                '<div class="markdown-body message-text" style="color:#9ca3af;">分析中...</div>';
+                            chatMessages.appendChild(wrap);
+                            typewriterEffect(wrap.querySelector('.message-text'), payload.content || '');
+                            scrollBottom();
                         }
                         else if (payload.event === 'error') {
                             if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
@@ -1309,6 +1328,14 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             block.appendChild(wrapper);
         }
 
+        function histDivergence(content) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'summary-msg';
+            wrapper.innerHTML = '<div class="summary-title">🔍 共识与分歧（自动分析）</div>' +
+                '<div class="markdown-body message-text">' + renderMarkdown(content || '') + '</div>';
+            chatMessages.appendChild(wrapper);
+        }
+
         async function loadHistory(id) {
             chatMessages.innerHTML = '<div class="message ai">正在加载历史记录...</div>';
             try {
@@ -1324,6 +1351,8 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                             histSpeak(parseInt(parts[1], 10) || 1, parts.slice(2).join(':'), m.content, groupBlocks);
                         } else if (tp.startsWith('GROUP_SUMMARY:')) {
                             histSummary(tp.slice('GROUP_SUMMARY:'.length), m.content, groupBlocks);
+                        } else if (tp.startsWith('GROUP_DIVERGENCE:')) {
+                            histDivergence(m.content);
                         } else {
                             addMessage(m.content, m.role);
                         }
