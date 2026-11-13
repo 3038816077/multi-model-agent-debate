@@ -23,7 +23,7 @@ import os
 import re
 from typing import Optional
 
-from app.core.config import get_model_registry, USAGE_LOG_PATH
+from app.core.config import get_model_registry, resolve_model_id, USAGE_LOG_PATH
 from app.core.logger import logger
 
 TIER_CHEAP = "cheap"
@@ -152,8 +152,20 @@ def route(message: str, has_doc: bool = False, web_search: bool = False):
 
 
 def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """按价格表估算这次调用的美元成本。"""
-    price_in, price_out = MODEL_PRICE_PER_M.get(model, (0.0, 0.0))
+    """按价格表估算这次调用的美元成本。
+
+    传进来的 model 可能是注册表 key（例如 qwen-plus），也可能是真实模型名。
+    两者价格可能差很多（key 是历史遗留，model 才是真正调用的那个），
+    所以先解析成真实模型再查价，避免按错单价记账。
+    """
+    real = model
+    try:
+        resolved = resolve_model_id(model)
+        if resolved:
+            real = resolved
+    except Exception:
+        pass
+    price_in, price_out = MODEL_PRICE_PER_M.get(real) or MODEL_PRICE_PER_M.get(model, (0.0, 0.0))
     return (prompt_tokens * price_in + completion_tokens * price_out) / 1_000_000
 
 
