@@ -76,3 +76,68 @@ def extract_long_term_memory(messages: list, existing_memory: str = "") -> str:
     if not new_memory or new_memory in ("空", "无", "None"):
         return existing_memory
     return new_memory
+
+
+MAX_USER_MEMORY_CHARS = 600
+
+
+def extract_user_memory(messages: list, existing_memory: str = "") -> str:
+    """提取「跨会话」稳定的用户信息。
+
+    和 extract_long_term_memory 的区别：
+    - 那个是「本会话」记忆（这次问了哪个城市、这个任务的结论）
+    - 这个是「跨会话」记忆（你是谁、长期偏好、固定技术栈）
+    """
+    prompt = """从下面的对话中，提取值得跨会话长期记住的用户信息。
+
+只提取这几类：
+1. 身份/角色/技术栈（例如：后端工程师，主要用 Python + FastAPI）
+2. 长期偏好（例如：回答要简短、代码要带注释、不要用表情符号）
+3. 长期目标或项目（例如：正在做一个多模型 Agent 项目）
+4. 用户明确要求「以后都这样」的规则
+
+不要提取：
+- 一次性的任务细节（这次问的天气、这个文件的内容）
+- 临时的上下文
+- 任何密钥、密码、手机号等敏感信息
+
+规则：
+- 每条一行，以「- 」开头，最多 10 条，总长不超过 400 字
+- 和旧记忆冲突时，保留最新说法，删掉旧的
+- 没有值得记的就返回空字符串
+
+旧记忆：
+{old_memory}
+
+最新对话：
+{dialog}"""
+
+    recent_msgs = messages[-8:] if len(messages) >= 8 else messages
+    dialog_text = ""
+    for msg in recent_msgs:
+        role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if role in ["user", "assistant"]:
+            dialog_text += f"{role}: {content}\n"
+
+    if not dialog_text:
+        return existing_memory
+
+    extra = {}
+    try:
+        if "volces.com" in str(get_llm_client().base_url):
+            extra["extra_body"] = {"thinking": {"type": "disabled"}}
+    except Exception:
+        pass
+
+    resp = get_llm_client().chat.completions.create(
+        model=get_model_name(),
+        messages=[{"role": "user", "content": prompt.format(old_memory=existing_memory, dialog=dialog_text)}],
+        max_tokens=400,
+        timeout=20,
+        **extra
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    if text in ("", "无", "没有"):
+        return existing_memory
+    return text[:MAX_USER_MEMORY_CHARS]

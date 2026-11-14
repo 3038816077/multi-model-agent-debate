@@ -14,14 +14,15 @@ from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_re
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import classify, pick_model, set_current_tier, log_usage, TIER_CHEAP
 from app.core.logger import logger, set_trace
-from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory
+from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory, extract_user_memory
 from app.tools.calc import get_current_time, calculate_expression
 from app.tools.registry import WEATHER_CACHE
 from app.agent.graph import agent_app
 from app.agent.group_graph import GroupState, get_client_for_model
 
 from app.db.database import SessionLocal
-from app.db.crud import get_messages, save_message, get_or_create_session, update_long_term_memory
+from app.db.crud import (get_messages, save_message, get_or_create_session,
+                         update_long_term_memory, get_user_memory, update_user_memory)
 from app.middleware.auth import limiter, verify_api_key
 from app.api.upload import load_document
 
@@ -328,8 +329,10 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
 
     db_session = get_or_create_session(db, session_id)
     memory_text = db_session.long_term_memory
-    if memory_text:
-        messages.insert(1, {"role": "system", "content": f"【用户长期记忆信息】\n{memory_text}\n\n以上是用户的长期固定信息，可以直接引用，无需重复询问用户。"})
+    user_memory = get_user_memory(db)
+    memory_prompt = _compose_memory_prompt(user_memory, memory_text)
+    if memory_prompt:
+        messages.insert(1, {"role": "system", "content": memory_prompt})
 
     time_keywords = ["时间", "几点", "日期", "星期几", "今天几号", "现在什么时候"]
     is_time_question = any(keyword in request_body.message for keyword in time_keywords)
@@ -421,6 +424,9 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         try:
             new_memory = extract_long_term_memory(final_messages, memory_text)
             update_long_term_memory(db, session_id, new_memory)
+            new_user_memory = extract_user_memory(final_messages, user_memory)
+            if new_user_memory:
+                update_user_memory(db, new_user_memory)
         except Exception as e:
             logger.warning(f"长期记忆更新失败：{str(e)}")
 
@@ -430,17 +436,53 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         return {"code": 500, "error": str(e)}
 
 
-async def _update_memory_bg(session_id: str, final_messages: list, memory_text: str):
-    """后台更新长期记忆：独立会话 + 独立线程，失败只记日志，绝不影响主回答。"""
+def _compose_memory_prompt(user_memory: str, session_memory: str) -> str:
+    """把「跨会话记忆」和「本会话记忆」拼成一条 system 消息。"""
+    parts = []
+    if user_memory:
+        parts.append(f"【用户长期信息（跨会话）】\n{user_memory}")
+    if session_memory:
+        parts.append(f"【本会话记忆】\n{session_memory}")
+    if not parts:
+        return ""
+    return "\n\n".join(parts) + "\n\n以上是用户的长期固定信息，可以直接引用，无需重复询问用户。"
+
+
+async def _update_memory_bg(session_id: str, final_messages: list, memory_text: str = None):
+    """后台更新记忆：会话级 + 用户级（跨会话）。失败只记日志，绝不影响主回答。
+
+    memory_text 传 None 表示由本函数自己从库里读当前会话记忆。
+    """
     try:
+        # 先短事务读出旧记忆，别在 await 期间占着数据库连接
+        bg_db = SessionLocal()
+        try:
+            if memory_text is None:
+                memory_text = get_or_create_session(bg_db, session_id).long_term_memory or ""
+            old_user_memory = get_user_memory(bg_db)
+        finally:
+            bg_db.close()
+
         new_memory = await asyncio.to_thread(extract_long_term_memory, final_messages, memory_text)
+        new_user_memory = await asyncio.to_thread(extract_user_memory, final_messages, old_user_memory)
+
         bg_db = SessionLocal()
         try:
             update_long_term_memory(bg_db, session_id, new_memory)
+            if new_user_memory:
+                update_user_memory(bg_db, new_user_memory)
         finally:
             bg_db.close()
     except Exception as e:
         logger.warning(f"长期记忆更新失败（不影响回答）：{str(e)}")
+
+
+def _schedule_group_memory(session_id: str, query: str, answers: dict):
+    """研讨模式下把这一轮对话丢给后台更新记忆（不阻塞 SSE）。"""
+    msgs = [{"role": "user", "content": query}]
+    msgs += [{"role": "assistant", "content": a} for a in answers.values() if a]
+    if len(msgs) > 1:
+        asyncio.create_task(_update_memory_bg(session_id, msgs))
 
 
 # ==================== 2. 单模型流式对话 ====================
@@ -462,8 +504,10 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
 
     db_session = get_or_create_session(db, session_id)
     memory_text = db_session.long_term_memory
-    if memory_text:
-        messages.insert(1, {"role": "system", "content": f"【用户长期记忆信息】\n{memory_text}\n\n以上是用户的长期固定信息，可以直接引用，无需重复询问用户。"})
+    user_memory = get_user_memory(db)
+    memory_prompt = _compose_memory_prompt(user_memory, memory_text)
+    if memory_prompt:
+        messages.insert(1, {"role": "system", "content": memory_prompt})
 
     time_keywords = ["时间", "几点", "日期", "星期几", "今天几号", "现在什么时候"]
     is_time_question = any(keyword in request_body.message for keyword in time_keywords)
@@ -667,8 +711,12 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     session_id = request_body.session_id or str(uuid.uuid4())
     save_message(db, session_id, "user", request_body.message)
 
-    # 上传的文档：整段拼进 query，三个阶段（首轮作答 / 交叉研讨 / 首席总结）都能看到原文
+    # 跨会话记忆拼在 query 最前面：首轮 / 互评 / 首席总结三个阶段都自动带上
+    _user_memory = get_user_memory(db)
     group_query = request_body.message
+    if _user_memory:
+        group_query = f"【用户长期信息（跨会话）】\n{_user_memory}\n\n{group_query}"
+    # 上传的文档：整段拼进 query，三个阶段（首轮作答 / 交叉研讨 / 首席总结）都能看到原文
     if request_body.attachment_id:
         doc = load_document(request_body.attachment_id)
         if doc:
@@ -758,6 +806,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                     save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:1:{m}")
                 save_message(db, session_id, "assistant", divergence or "",
                              f"GROUP_DIVERGENCE:{request_body.chief_model}")
+                _schedule_group_memory(session_id, request_body.message, valid_answers)
 
                 yield f"data: {json.dumps({'event': 'done', 'session_id': session_id})}\n\n"
                 return
@@ -836,6 +885,8 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                 save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:2:{m}")
             save_message(db, session_id, "assistant", summary_content or "",
                          f"GROUP_SUMMARY:{request_body.chief_model}")
+            _schedule_group_memory(session_id, request_body.message,
+                                   dict(state["first_round"], **state["discussion"]))
 
             yield f"data: {json.dumps({'event': 'done', 'session_id': session_id})}\n\n"
 

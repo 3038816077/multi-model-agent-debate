@@ -19,3 +19,16 @@ class DBMessage(Base):
     content = Column(Text)
     thought_process = Column(Text, default="") # 顺便把思考过程也存下来
     created_at = Column(DateTime, default=datetime.now)
+
+
+class DBUserMemory(Base):
+    """跨会话的用户级长期记忆（单用户应用，固定一行 id="global"）。
+
+    和 DBSession.long_term_memory 的区别：
+    那个只对当前会话生效，换会话就没了；这张表全局共享。
+    """
+    __tablename__ = "user_memory"
+
+    id = Column(String, primary_key=True)
+    content = Column(Text, default="")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)

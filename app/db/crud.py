@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy.orm import Session
-from app.db.models import DBSession, DBMessage
+from app.db.models import DBSession, DBMessage, DBUserMemory
 
 def get_messages(db: Session, session_id: str, limit: int = 20) -> list:
     """从数据库拉取最近 N 条历史消息"""
@@ -49,4 +49,23 @@ def update_long_term_memory(db: Session, session_id: str, memory: str):
     """更新长期记忆"""
     db_sess = get_or_create_session(db, session_id)
     db_sess.long_term_memory = memory
+    db.commit()
+
+
+USER_MEMORY_ID = "global"
+
+
+def get_user_memory(db: Session) -> str:
+    """读跨会话记忆，没有就返回空字符串。"""
+    row = db.query(DBUserMemory).filter(DBUserMemory.id == USER_MEMORY_ID).first()
+    return row.content if row else ""
+
+
+def update_user_memory(db: Session, content: str):
+    """写跨会话记忆（只保留一份，整体覆盖）。"""
+    row = db.query(DBUserMemory).filter(DBUserMemory.id == USER_MEMORY_ID).first()
+    if not row:
+        row = DBUserMemory(id=USER_MEMORY_ID, content="")
+        db.add(row)
+    row.content = content or ""
     db.commit()
