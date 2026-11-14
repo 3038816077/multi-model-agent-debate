@@ -721,18 +721,26 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                             **_model_extra(model_name)
                         )
                         _log_resp(resp, model_name, current_trace_id, _t0)
-                        return model_name, resp.choices[0].message.content
+                        return model_name, resp.choices[0].message.content, True
                     except Exception as e:
-                        return model_name, friendly_llm_error(e, model_name)
+                        return model_name, friendly_llm_error(e, model_name), False
                 return await asyncio.to_thread(sync_call)
 
             tasks_1 = [run_first_round(m) for m in request_body.staff_models]
             for future in asyncio.as_completed(tasks_1):
-                m_name, content = await future
+                m_name, content, ok = await future
                 state["first_round"][m_name] = content
+                if not ok:
+                    # 失败的回答只用于前端展示，不参与后续研讨（否则错误文案会被当成“观点”喂给别的模型）
+                    state["failed_models"].append(m_name)
                 yield f"data: {json.dumps({'event': 'speak', 'stage': 1, 'model': m_name, 'content': content}, ensure_ascii=False)}\n\n"
 
-            if not state["first_round"]:
+            # 只有成功的回答才进入后续阶段
+            valid_answers = {
+                m: a for m, a in state["first_round"].items()
+                if m not in state["failed_models"]
+            }
+            if not valid_answers:
                 yield f"data: {json.dumps({'event': 'error', 'data': '所有副模型均失败，无法继续。'})}\n\n"
                 return
 
@@ -740,14 +748,6 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             # 走到这里说明第一轮已经全部返回。直接做分歧分析然后收尾，
             # 后面的第二轮、首席总结整段跳过。
             if (request_body.mode or "debate").strip().lower() == "parallel":
-                valid_answers = {
-                    m: a for m, a in state["first_round"].items()
-                    if a and len(a) > 50      # 过滤掉失败时写入的错误文案
-                }
-                if not valid_answers:
-                    yield f"data: {json.dumps({'event': 'error', 'data': '没有可用的回答，无法生成分歧分析。'}, ensure_ascii=False)}\n\n"
-                    return
-
                 yield f"data: {json.dumps({'event': 'stage', 'data': '分歧分析'}, ensure_ascii=False)}\n\n"
                 divergence = await analyze_divergence(
                     state["query"], valid_answers, current_trace_id, request_body.chief_model
@@ -764,7 +764,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
 
             # ---------------- 阶段二：第二轮交叉讨论 ----------------
             yield f"data: {json.dumps({'event': 'stage', 'data': '第二轮：交叉研讨'}, ensure_ascii=False)}\n\n"
-            active_models_2 = list(state["first_round"].keys())
+            active_models_2 = list(valid_answers.keys())
             yield f"data: {json.dumps({'event': 'init_models', 'models': active_models_2}, ensure_ascii=False)}\n\n"
 
             async def run_discussion(model_name):
@@ -772,7 +772,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                     try:
                         client = get_client_for_model(model_name)
                         context_str = ""
-                        for m, ans in state["first_round"].items():
+                        for m, ans in valid_answers.items():
                             if m != model_name:
                                 context_str += f"【{m} 的观点】：\n{ans}\n\n"
                         prompt = f"针对问题：{state['query']}\n\n其他专家的第一轮观点如下：\n{context_str}\n\n请你基于以上信息，发表你的补充意见，或者指出他们可能存在的漏洞。请保持专业客观。"
@@ -804,7 +804,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                     client = get_client_for_model(request_body.chief_model)
                     prompt = f"用户提出了以下问题：{state['query']}\n\n"
                     prompt += "=== 第一阶段：专家独立观点 ===\n"
-                    for m, ans in state["first_round"].items():
+                    for m, ans in valid_answers.items():
                         prompt += f"[{m}]: {ans}\n"
                     prompt += "\n=== 第二阶段：专家交叉研讨 ===\n"
                     for m, ans in state["discussion"].items():
