@@ -1209,7 +1209,12 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                             const payload = JSON.parse(line.replace("data: ", ""));
                             if (payload.event === 'thinking_start') { thoughtDiv.textContent = ""; thoughtQueue = ""; } 
                             else if (payload.event === 'thinking') { thoughtQueue += payload.data; } 
-                            else if (payload.event === 'thinking_done') { toggle.textContent = '查看思考过程'; } 
+                            else if (payload.event === 'thinking_done') { 
+                                // 这次没有任何思考内容（没调工具、也没执行链）：
+                                // 直接把"查看思考过程"藏掉，别留个空框子
+                                if (payload.empty) { toggle.style.display = 'none'; thoughtDiv.style.display = 'none'; }
+                                else { toggle.textContent = '查看思考过程'; }
+                            } 
                             else if (payload.event === 'content') { 
                                 if (toggle.textContent === '正在思考...') toggle.textContent = '查看思考过程';
                                 contentQueue += payload.data; 

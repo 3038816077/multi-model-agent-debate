@@ -297,12 +297,17 @@ def _sse(obj) -> str:
 
 async def _stream_answer(thought_process: str, final_answer: str, trace_id: str, session_id: str):
     """统一的"先思考、再回答"流式帧序列（快路径与图路径共用）"""
+    # 不管有没有思考内容，都要发一次 thinking_start：
+    # 流一开始发过一条 {'event':'thinking','data':'正在思考...'} 的占位符，
+    # 如果这里不发 start，前端就没有人负责清掉它，
+    # 于是没有工具调用的普通问答会永远挂着"正在思考..."。
+    yield _sse({"event": "thinking_start"})
     if thought_process:
-        yield _sse({"event": "thinking_start"})
         for char in thought_process:
             yield _sse({"event": "thinking", "data": char})
             await asyncio.sleep(0.005)
-        yield _sse({"event": "thinking_done"})
+    yield _sse({"event": "thinking_done", "empty": not thought_process})
+    if thought_process:
         await asyncio.sleep(0.2)
     for char in final_answer:
         yield _sse({"event": "content", "data": char})
