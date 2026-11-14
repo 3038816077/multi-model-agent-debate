@@ -254,7 +254,7 @@ def _is_time_question(message: str) -> bool:
 
 
 def _build_fast_reply(message: str):
-    """时间/纯算术的确定性回答，返回 (final_answer, thought_process)；不命中返回 None"""
+    """时间/纯算术的确定性回答，返回 (final_answer, thought_process, meta)；不命中返回 None"""
     if _is_time_question(message):
         raw = get_current_time()                     # 当前时间：2026年11月09日 13:35:20,星期一
         pretty = raw.replace("当前时间：", "", 1).strip()
@@ -262,7 +262,8 @@ def _build_fast_reply(message: str):
         thought = ("【执行链路】\n\n"
                    "第1步 调用工具：get_current_time\n参数：{}\n\n"
                    f"第2步 返回结果：{raw}")
-        return answer, thought
+        meta = {"rule": "时间查询", "detail": "读取系统时间，未调用大模型"}
+        return answer, thought, meta
 
     expr = _extract_pure_expression(message)
     if expr:
@@ -271,8 +272,21 @@ def _build_fast_reply(message: str):
                    "第1步 调用工具：calculate_expression\n"
                    f"参数：{{\"expression\": \"{expr}\"}}\n\n"
                    f"第2步 返回结果：{raw}")
-        return raw, thought
+        meta = {"rule": "纯算术", "detail": "本地计算 %s，未调用大模型" % expr}
+        return raw, thought, meta
     return None
+
+
+def _fast_step(meta: dict) -> list:
+    """快路径也是"执行方式"的一种，给前端一张卡片，别和调模型的样子不一样。"""
+    return [{
+        "type": "fast",
+        "name": "确定性快路径",
+        "args": {"规则": meta.get("rule", "")},
+        "result": "%s · 成本 0" % meta.get("detail", ""),
+        "duration_ms": 0,
+        "ok": True,
+    }]
 
 
 def _pick_final_answer(final_messages) -> str:
@@ -486,7 +500,7 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
     # 确定性快路径：时间 / 纯算术，不依赖大模型是否愿意调用工具
     fast = _build_fast_reply(request_body.message)
     if fast:
-        fast_answer, fast_thought = fast
+        fast_answer, fast_thought, fast_meta = fast
         save_message(db, session_id, "assistant", fast_answer, fast_thought)
         return {"code": 200, "answer": fast_answer, "session_id": session_id,
                 "thought_process": fast_thought, "trace_id": current_trace_id}
@@ -668,9 +682,10 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
             # 确定性快路径：时间 / 纯算术，不依赖大模型是否愿意调用工具
             fast = _build_fast_reply(request_body.message)
             if fast:
-                fast_answer, fast_thought = fast
+                fast_answer, fast_thought, fast_meta = fast
                 save_message(db, session_id, "assistant", fast_answer, fast_thought)
-                async for frame in _stream_answer(fast_thought, fast_answer, current_trace_id, session_id):
+                async for frame in _stream_answer(fast_thought, fast_answer, current_trace_id, session_id,
+                                                  _fast_step(fast_meta)):
                     yield frame
                 return
 

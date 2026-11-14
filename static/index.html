@@ -195,6 +195,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 .step-card.step-memory { border-left: 3px solid #6ee7b7; }
 .step-card.step-tool   { border-left: 3px solid #fcd34d; }
 .step-card.step-llm    { border-left: 3px solid #93c5fd; }
+.step-card.step-fast   { border-left: 3px solid #9ca3af; }
 .step-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .step-name { font-weight: 600; color: var(--ink); font-family: ui-monospace, Consolas, monospace; }
 .step-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -1110,7 +1111,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
         }
 
-        const STEP_ICONS = { route: '🧭', memory: '🧠', tool: '⚙', llm: '⚡' };
+        const STEP_ICONS = { route: '🧭', memory: '🧠', tool: '⚙', llm: '⚡', fast: '⏱' };
 
         function renderSteps(steps) {
             if (!steps || !steps.length) return '';
