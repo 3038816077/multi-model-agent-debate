@@ -140,4 +140,28 @@ def extract_user_memory(messages: list, existing_memory: str = "") -> str:
     text = (resp.choices[0].message.content or "").strip()
     if text in ("", "无", "没有"):
         return existing_memory
-    return text[:MAX_USER_MEMORY_CHARS]
+
+    # 关键防线：模型偶尔会返回一串只有项目符号、没有内容的东西（"- \n- \n- "），
+    # 直接写进去等于把用户所有记忆覆盖成一堆空行。逐行剔掉空要点，
+    # 一条有效内容都没有就保持旧记忆不动。
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # "-"、"•"、"*"、"·" 以及 "1." 这种只有序号没有正文的
+        if stripped.lstrip("-•*·").strip() == "":
+            continue
+        if stripped.rstrip(".").isdigit():
+            continue
+        kept.append(stripped)
+
+    if not kept:
+        # 延迟导入：utils 在 import 链的早期，直接 import logger 有循环依赖风险
+        try:
+            from app.core.logger import logger
+            logger.warning("[长期记忆] 模型返回了空要点，保留旧记忆不覆盖")
+        except Exception:
+            pass
+        return existing_memory
+    return "\n".join(kept)[:MAX_USER_MEMORY_CHARS]

@@ -191,6 +191,10 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 }
 .step-card:last-child { margin-bottom: 0; }
 .step-card.step-fail { border-color: #fecaca; background: #fef2f2; }
+.step-card.step-route  { border-left: 3px solid #a5b4fc; }
+.step-card.step-memory { border-left: 3px solid #6ee7b7; }
+.step-card.step-tool   { border-left: 3px solid #fcd34d; }
+.step-card.step-llm    { border-left: 3px solid #93c5fd; }
 .step-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .step-name { font-weight: 600; color: var(--ink); font-family: ui-monospace, Consolas, monospace; }
 .step-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -1106,17 +1110,22 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
         }
 
+        const STEP_ICONS = { route: '🧭', memory: '🧠', tool: '⚙', llm: '⚡' };
+
         function renderSteps(steps) {
             if (!steps || !steps.length) return '';
             return steps.map(s => {
+                const type = s.type || 'tool';
+                const icon = STEP_ICONS[type] || '⚙';
                 const hasArgs = s.args && Object.keys(s.args).length;
-                const args = hasArgs ? escapeHtml(JSON.stringify(s.args)) : '';
+                // 只有工具调用才叫"参数"，路由/记忆/生成是补充信息
+                const args = hasArgs ? (type === 'tool' ? '参数：' : '') + escapeHtml(JSON.stringify(s.args)) : '';
                 const dur = (s.duration_ms === null || s.duration_ms === undefined) ? '' : s.duration_ms + ' ms';
                 const res = escapeHtml(String(s.result || '')).replace(/\n/g, '<br>');
-                return '<div class="step-card ' + (s.ok ? '' : 'step-fail') + '">' +
-                    '<div class="step-head"><span class="step-name">⚙ ' + escapeHtml(s.name) + '</span>' +
+                return '<div class="step-card step-' + type + (s.ok ? '' : ' step-fail') + '">' +
+                    '<div class="step-head"><span class="step-name">' + icon + ' ' + escapeHtml(s.name) + '</span>' +
                     '<span class="step-time">' + dur + '</span></div>' +
-                    (args ? '<div class="step-args">参数：' + args + '</div>' : '') +
+                    (args ? '<div class="step-args">' + args + '</div>' : '') +
                     (res ? '<div class="step-result">' + res + '</div>' : '') +
                     '</div>';
             }).join('');

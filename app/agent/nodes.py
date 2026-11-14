@@ -62,6 +62,16 @@ def llm_node(state: State):
     # 记录用量：算成本、做对照实验都靠这份数据
     _usage = getattr(resp, "usage", None)
     if _usage is not None:
+        _lat = int((time.time() - _t0) * 1000)
+        LAST_USAGE[get_trace()] = {
+            "model": get_model_name(),
+            "prompt_tokens": getattr(_usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(_usage, "completion_tokens", 0) or 0,
+            "latency_ms": _lat,
+        }
+        if len(LAST_USAGE) > 500:
+            for _k in list(LAST_USAGE)[:250]:
+                LAST_USAGE.pop(_k, None)
         log_usage(
             trace_id=get_trace(),
             model=get_model_name(),
@@ -77,6 +87,9 @@ def llm_node(state: State):
 # 工具调用耗时：tool_call_id -> 毫秒。chat.py 生成"执行过程卡片"时按 id 取。
 # 单进程应用，直接放模块级字典即可；超过上限就丢最早的，避免长期运行后无限增长。
 TOOL_TIMINGS: dict = {}
+
+# 最近一次模型调用的用量（trace_id -> {...}），chat.py 生成"生成步骤"时取。
+LAST_USAGE: dict = {}
 
 
 def tool_node(state: State):

@@ -12,13 +12,14 @@ import app.tools.knowledge
 import app.tools.web_search
 from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
-from app.core.router import classify, pick_model, set_current_tier, log_usage, TIER_CHEAP
+from app.core.router import (classify, pick_model, set_current_tier, log_usage,
+                             estimate_cost, TIER_CHEAP, TIER_MID, TIER_STRONG)
 from app.core.logger import logger, set_trace
 from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory, extract_user_memory
 from app.tools.calc import get_current_time, calculate_expression
 from app.tools.registry import WEATHER_CACHE
 from app.agent.graph import agent_app
-from app.agent.nodes import TOOL_TIMINGS
+from app.agent.nodes import TOOL_TIMINGS, LAST_USAGE
 from app.agent.group_graph import GroupState, get_client_for_model
 
 from app.db.database import SessionLocal
@@ -296,6 +297,68 @@ def _sse(obj) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
 
+TIER_LABELS = {
+    TIER_CHEAP: "简单任务 · 成本优先",
+    TIER_MID: "中等任务 · 平衡",
+    TIER_STRONG: "复杂任务 · 质量优先",
+}
+
+
+def _context_steps(routed, user_memory: str, memory_text: str) -> list:
+    """非工具类步骤：模型路由、记忆命中。这些每次请求都有。"""
+    steps = []
+    if routed:
+        step = {
+            "type": "route",
+            "name": "模型路由",
+            "args": {"模型": routed.get("model") or ""},
+            "result": TIER_LABELS.get(routed.get("tier"), routed.get("tier") or ""),
+            "duration_ms": None,
+            "ok": True,
+        }
+        steps.append(step)
+
+    if user_memory or memory_text:
+        args = {}
+        if user_memory:
+            args["跨会话"] = "%d 条" % len([x for x in user_memory.split("\n") if x.strip()])
+        if memory_text:
+            args["本会话"] = "%d 条" % len([x for x in memory_text.split("\n") if x.strip()])
+        preview = (user_memory or memory_text or "").strip().split("\n")[:2]
+        steps.append({
+            "type": "memory",
+            "name": "命中长期记忆",
+            "args": args,
+            "result": "\n".join(preview)[:200],
+            "duration_ms": None,
+            "ok": True,
+        })
+    return steps
+
+
+def _usage_step(trace_id: str) -> dict:
+    """最后一次模型调用的用量：token、成本、耗时。"""
+    u = LAST_USAGE.get(trace_id)
+    if not u:
+        return None
+    pt = u.get("prompt_tokens", 0)
+    ct = u.get("completion_tokens", 0)
+    try:
+        cost = estimate_cost(u.get("model", ""), pt, ct)
+    except Exception:
+        cost = 0.0
+    # 价格表没收录的模型 estimate_cost 会返回 0，别显示成"0 美元"骗人
+    cost_txt = ("美元%.6f" % cost) if cost > 0 else "成本未收录"
+    return {
+        "type": "llm",
+        "name": "生成回答",
+        "args": {"模型": u.get("model", "")},
+        "result": "%d + %d tokens · %s · %d ms" % (pt, ct, cost_txt, u.get("latency_ms", 0)),
+        "duration_ms": u.get("latency_ms"),
+        "ok": True,
+    }
+
+
 def _collect_steps(messages: list, input_len: int) -> list:
     """把这一轮 agent 执行过的工具调用整理成结构化步骤，供前端渲染成卡片。
 
@@ -319,7 +382,7 @@ def _collect_steps(messages: list, input_len: int) -> list:
                 except Exception:
                     args = {"raw": str(raw_args)}
                 step_index += 1
-                step = {"index": step_index, "name": name, "args": args,
+                step = {"type": "tool", "index": step_index, "name": name, "args": args,
                         "result": "", "duration_ms": None, "ok": True}
                 steps.append(step)
                 tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
@@ -644,7 +707,11 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
                     step_list.append(f"第{step_index}步 返回结果：{content}")
                     step_index += 1
 
-            steps = _collect_steps(final_messages, input_len)
+            steps = _context_steps(routed, user_memory, memory_text) + \
+                _collect_steps(final_messages, input_len)
+            _u = _usage_step(current_trace_id)
+            if _u:
+                steps.append(_u)
 
             if step_list:
                 thought_process = "【执行链路】\n" + "\n\n".join(step_list)
