@@ -74,6 +74,11 @@ def llm_node(state: State):
     logger.info(f"[LLM返回] 内容: {msg.content}, 工具调用: {msg.tool_calls}")
     return {"messages": messages + [msg]}
 
+# 工具调用耗时：tool_call_id -> 毫秒。chat.py 生成"执行过程卡片"时按 id 取。
+# 单进程应用，直接放模块级字典即可；超过上限就丢最早的，避免长期运行后无限增长。
+TOOL_TIMINGS: dict = {}
+
+
 def tool_node(state: State):
     messages = state["messages"]
     last_message = messages[-1]
@@ -96,7 +101,14 @@ def tool_node(state: State):
             tool_args = json.loads(tool_call.function.arguments)
         except Exception:
             tool_args = {}
-        content = execute_tool(tool_call.function.name, tool_args, session_id)
+        _t = time.time()
+        try:
+            content = execute_tool(tool_call.function.name, tool_args, session_id)
+        finally:
+            TOOL_TIMINGS[tool_call.id] = int((time.time() - _t) * 1000)
+            if len(TOOL_TIMINGS) > 500:
+                for _k in list(TOOL_TIMINGS)[:250]:
+                    TOOL_TIMINGS.pop(_k, None)
         return tool_call, content
 
     max_workers = min(len(last_message.tool_calls), 5)

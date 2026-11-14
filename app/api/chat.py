@@ -18,6 +18,7 @@ from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialo
 from app.tools.calc import get_current_time, calculate_expression
 from app.tools.registry import WEATHER_CACHE
 from app.agent.graph import agent_app
+from app.agent.nodes import TOOL_TIMINGS
 from app.agent.group_graph import GroupState, get_client_for_model
 
 from app.db.database import SessionLocal
@@ -295,18 +296,66 @@ def _sse(obj) -> str:
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
 
-async def _stream_answer(thought_process: str, final_answer: str, trace_id: str, session_id: str):
+def _collect_steps(messages: list, input_len: int) -> list:
+    """把这一轮 agent 执行过的工具调用整理成结构化步骤，供前端渲染成卡片。
+
+    返回 [{"index":1,"name":"get_weather","args":{...},"result":"...","duration_ms":12,"ok":true}]
+    """
+    steps = []
+    pending = {}      # tool_call_id -> step
+    step_index = 0
+    for msg in messages[input_len:]:
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+        if role == "assistant":
+            tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+            if not tool_calls:
+                continue
+            for tc in tool_calls:
+                func = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
+                name = func.get("name") if isinstance(func, dict) else getattr(func, "name", "")
+                raw_args = func.get("arguments") if isinstance(func, dict) else getattr(func, "arguments", "{}")
+                try:
+                    args = json.loads(raw_args or "{}")
+                except Exception:
+                    args = {"raw": str(raw_args)}
+                step_index += 1
+                step = {"index": step_index, "name": name, "args": args,
+                        "result": "", "duration_ms": None, "ok": True}
+                steps.append(step)
+                tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                if tc_id:
+                    pending[tc_id] = step
+        elif role == "tool":
+            tc_id = msg.get("tool_call_id") if isinstance(msg, dict) else getattr(msg, "tool_call_id", None)
+            step = pending.get(tc_id)
+            if step is None:
+                continue
+            content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+            content = content or ""
+            step["result"] = content[:500]
+            step["ok"] = not content.startswith(
+                ("错误：", "工具执行异常：", "查询失败：", "知识库检索失败："))
+            if tc_id in TOOL_TIMINGS:
+                step["duration_ms"] = TOOL_TIMINGS[tc_id]
+    return steps
+
+
+async def _stream_answer(thought_process: str, final_answer: str, trace_id: str, session_id: str,
+                         steps: list = None):
     """统一的"先思考、再回答"流式帧序列（快路径与图路径共用）"""
     # 不管有没有思考内容，都要发一次 thinking_start：
     # 流一开始发过一条 {'event':'thinking','data':'正在思考...'} 的占位符，
     # 如果这里不发 start，前端就没有人负责清掉它，
     # 于是没有工具调用的普通问答会永远挂着"正在思考..."。
     yield _sse({"event": "thinking_start"})
-    if thought_process:
+    if steps:
+        # 结构化执行步骤：前端渲染成卡片（工具名 / 参数 / 耗时 / 结果）
+        yield _sse({"event": "steps", "data": steps})
+    elif thought_process:
         for char in thought_process:
             yield _sse({"event": "thinking", "data": char})
             await asyncio.sleep(0.005)
-    yield _sse({"event": "thinking_done", "empty": not thought_process})
+    yield _sse({"event": "thinking_done", "empty": not (steps or thought_process)})
     if thought_process:
         await asyncio.sleep(0.2)
     for char in final_answer:
@@ -595,6 +644,8 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
                     step_list.append(f"第{step_index}步 返回结果：{content}")
                     step_index += 1
 
+            steps = _collect_steps(final_messages, input_len)
+
             if step_list:
                 thought_process = "【执行链路】\n" + "\n\n".join(step_list)
                 if "search_knowledge" in thought_process and "【来源文件:" in thought_process:
@@ -625,7 +676,7 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
             #    改成后台任务，答案立刻下发。
             asyncio.create_task(_update_memory_bg(session_id, final_messages, memory_text))
 
-            async for frame in _stream_answer(thought_process, final_answer, current_trace_id, session_id):
+            async for frame in _stream_answer(thought_process, final_answer, current_trace_id, session_id, steps):
                 yield frame
             
         except Exception as e:

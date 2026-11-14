@@ -184,6 +184,23 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
     white-space: pre-wrap; display: none; max-height: 260px; overflow-y: auto;
 }
 
+/* ---------- 执行过程卡片 ---------- */
+.step-card {
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px;
+    background: #fff; font-size: 12px; line-height: 1.6;
+}
+.step-card:last-child { margin-bottom: 0; }
+.step-card.step-fail { border-color: #fecaca; background: #fef2f2; }
+.step-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.step-name { font-weight: 600; color: var(--ink); font-family: ui-monospace, Consolas, monospace; }
+.step-time { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.step-args, .step-result {
+    margin-top: 5px; font-family: ui-monospace, Consolas, monospace;
+    font-size: 11.5px; color: var(--ink-2); word-break: break-all;
+}
+.step-args { color: var(--muted); }
+.step-result { border-top: 1px dashed var(--line); padding-top: 5px; }
+
 /* ---------- 多模型研讨 ---------- */
 .stage-divider {
     text-align: center; font-size: 12.5px; font-weight: 700; letter-spacing: .03em;
@@ -1089,6 +1106,22 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
         }
 
+        function renderSteps(steps) {
+            if (!steps || !steps.length) return '';
+            return steps.map(s => {
+                const hasArgs = s.args && Object.keys(s.args).length;
+                const args = hasArgs ? escapeHtml(JSON.stringify(s.args)) : '';
+                const dur = (s.duration_ms === null || s.duration_ms === undefined) ? '' : s.duration_ms + ' ms';
+                const res = escapeHtml(String(s.result || '')).replace(/\n/g, '<br>');
+                return '<div class="step-card ' + (s.ok ? '' : 'step-fail') + '">' +
+                    '<div class="step-head"><span class="step-name">⚙ ' + escapeHtml(s.name) + '</span>' +
+                    '<span class="step-time">' + dur + '</span></div>' +
+                    (args ? '<div class="step-args">参数：' + args + '</div>' : '') +
+                    (res ? '<div class="step-result">' + res + '</div>' : '') +
+                    '</div>';
+            }).join('');
+        }
+
         async function sendMessage() {
             let text = userInput.value.trim();
             if ((!text && !attachedDoc) || isGenerating) return;
@@ -1120,6 +1153,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 
             let singleFlush = null;
             let aiToggle = null;   // 兜底用：不管成功失败，别让"正在思考..."永远挂着
+            let stepCount = 0;     // 这次执行了几步工具调用（决定按钮要不要显示步数）
             try {
                 const response = await fetch('/chat/stream', {
                     method: 'POST',
@@ -1159,7 +1193,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 toggle.onclick = () => {
                     const isShow = thoughtDiv.style.display === 'block';
                     thoughtDiv.style.display = isShow ? 'none' : 'block';
-                    toggle.textContent = isShow ? '查看思考过程' : '收起思考过程';
+                    toggle.textContent = isShow ? ('查看执行过程' + (stepCount ? '（' + stepCount + ' 步）' : '')) : '收起执行过程';
                 };
                 aiBubble.appendChild(toggle);
                 aiBubble.appendChild(thoughtDiv);
@@ -1207,16 +1241,21 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     for (const line of lines) {
                         if (line.startsWith("data: ")) {
                             const payload = JSON.parse(line.replace("data: ", ""));
-                            if (payload.event === 'thinking_start') { thoughtDiv.textContent = ""; thoughtQueue = ""; } 
+                            if (payload.event === 'thinking_start') { thoughtDiv.textContent = ""; thoughtQueue = ""; stepCount = 0; } 
                             else if (payload.event === 'thinking') { thoughtQueue += payload.data; } 
+                            else if (payload.event === 'steps') {
+                                // 结构化执行步骤：工具名 / 参数 / 耗时 / 结果，渲染成卡片
+                                stepCount = (payload.data || []).length;
+                                thoughtDiv.innerHTML = renderSteps(payload.data);
+                            } 
                             else if (payload.event === 'thinking_done') { 
                                 // 这次没有任何思考内容（没调工具、也没执行链）：
                                 // 直接把"查看思考过程"藏掉，别留个空框子
                                 if (payload.empty) { toggle.style.display = 'none'; thoughtDiv.style.display = 'none'; }
-                                else { toggle.textContent = '查看思考过程'; }
+                                else { toggle.textContent = '查看执行过程' + (stepCount ? '（' + stepCount + ' 步）' : ''); }
                             } 
                             else if (payload.event === 'content') { 
-                                if (toggle.textContent === '正在思考...') toggle.textContent = '查看思考过程';
+                                if (toggle.textContent === '正在思考...') toggle.textContent = '查看执行过程' + (stepCount ? '（' + stepCount + ' 步）' : '');
                                 contentQueue += payload.data; 
                             } 
                             else if (payload.event === 'done') {
@@ -1238,7 +1277,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 
                 // 兜底：无论成功、报错还是被中断，都不留下"正在思考..."挂在界面上
                 if (aiToggle && aiToggle.textContent.indexOf('正在思考') === 0) {
-                    aiToggle.textContent = '查看思考过程';
+                    aiToggle.textContent = stepCount ? ('查看执行过程（' + stepCount + ' 步）') : '查看执行过程';
                 }
                 thinkingDiv.remove();
                 
