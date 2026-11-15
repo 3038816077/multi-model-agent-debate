@@ -10,7 +10,7 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import ENABLE_USER_MEMORY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
+from app.core.config import ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import (classify, pick_model, set_current_tier, log_usage,
                              estimate_cost, TIER_CHEAP, TIER_MID, TIER_STRONG)
@@ -219,8 +219,10 @@ _FILLER_WORDS = [
     "帮我算一下", "帮我计算", "请帮我算", "请计算", "计算一下", "算一下", "计算",
     "等于多少", "等于几", "是多少", "得多少", "结果是多少", "请", "一下",
 ]
-_TIME_KEYWORDS = ["几点", "现在时间", "当前时间", "什么时间", "什么时候",
-                  "今天几号", "今天日期", "星期几", "周几", "日期"]
+# 只保留指向"读取当前时间"的明确说法。
+# "什么时候""什么时间""日期" 太宽泛："多模型研讨什么时候值得用" 会被误判成问时间。
+_TIME_KEYWORDS = ["几点", "几点钟", "现在时间", "当前时间", "目前时间", "现在几点",
+                  "今天几号", "今天日期", "今天星期几", "星期几", "周几"]
 
 
 def _normalize_expr_text(text: str) -> str:
@@ -255,7 +257,7 @@ def _is_time_question(message: str) -> bool:
 
 def _build_fast_reply(message: str):
     """时间/纯算术的确定性回答，返回 (final_answer, thought_process, meta)；不命中返回 None"""
-    if _is_time_question(message):
+    if ENABLE_FAST_REPLY and _is_time_question(message):
         raw = get_current_time()                     # 当前时间：2026年11月09日 13:35:20,星期一
         pretty = raw.replace("当前时间：", "", 1).strip()
         answer = f"当前时间是：{pretty}"
@@ -877,6 +879,22 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
         async def error_gen():
             yield f"data: {json.dumps({'event': 'error', 'data': '主模型不能和副模型重复'})}\n\n"
         return StreamingResponse(error_gen(), media_type="text/event-stream")
+
+    # 确定性任务（时间/纯算术）不需要开会：直接给答案，不调用任何模型。
+    # 单模型和研讨两条路径共用同一个快速通道，避免同一个问题换个按钮行为就变。
+    _fast = _build_fast_reply(request_body.message) if ENABLE_FAST_REPLY else None
+    if _fast:
+        _fast_answer, _fast_thought, _fast_meta = _fast
+        logger.info(f"【研讨模式】命中快速通道：{_fast_meta.get('rule')}，未调用模型")
+
+        async def fast_gen():
+            yield f"data: {json.dumps({'event': 'stage', 'data': '确定性快速通道'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'event': 'fast_path', 'data': _fast_meta}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'event': 'summary', 'model': request_body.chief_model, 'content': _fast_answer}, ensure_ascii=False)}\n\n"
+            save_message(db, session_id, "assistant", _fast_answer, _fast_thought)
+            yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id, 'fast_path': _fast_meta.get('rule')}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(fast_gen(), media_type="text/event-stream")
 
     async def event_generator():
         try:
