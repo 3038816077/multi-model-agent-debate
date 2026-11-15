@@ -56,6 +56,8 @@ The mechanism is compression: the chief squeezes ~7,000 characters of expert out
 | Round 1 · independent answers | All participating models answer in parallel, blind to each other | Keeps the views **independent**, so nobody copies a neighbour |
 | Round 2 · consensus / conflict report | A cheap model reads every answer and groups the points into **agreed / conflicting / one-off** | Shows *where the models disagree*, which is the useful signal — without flattening it into one answer |
 
+Conflicts are grouped by **stance**, not by model: when three models answer and two of them agree, the report says `A、C（立场）` vs `B（立场）` instead of listing three separate opinions.
+
 The report is **structured under the hood** — the judge returns `consensus` / `conflict` / `oneoff` as JSON and the server renders them as three blocks; if a model ignores the format, the raw text is shown instead of an error.
 
 `DIVERGENCE_MODEL` controls which model writes it: `chief` (default) uses the model you picked in the panel — the report is the main output of this mode, so a cheap model is a mismatch; `cheap` falls back to the cheap tier, which is roughly 20 seconds faster and noticeably shallower.

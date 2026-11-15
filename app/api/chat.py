@@ -788,24 +788,28 @@ GROUP_DIVERGENCE_PROMPT = """下面是 {n} 个模型对同一个问题的独立�
 - 一个说得详细、另一个没展开，不算分歧，也不算孤例
 - 不要因为"某个回答没提到某一点"就判定成分歧或孤例
 
-只输出 JSON，不要输出任何解释文字，也不要包代码块。结构如下：
+只输出 JSON，不要输出任何解释文字，也不要包代码块：
 
 {{
-  "consensus": ["所有回答结论一致的核心判断，每条一句话"],
-  "conflict": [{{"point": "分歧点", "sides": ["一方认为…", "另一方认为…"]}}],
+  "consensus": ["所有回答结论一致的核心判断"],
+  "conflict": [{{
+    "point": "分歧点",
+    "groups": [
+      {{"answers": [1, 3], "stance": "这一方的立场，一句话"}},
+      {{"answers": [2], "stance": "另一方的立场，一句话"}}
+    ]
+  }}],
   "oneoff": ["只有一方给出、但会影响结论的具体事实或数字"]
 }}
 
 要求：
+- **相同立场的回答必须放进同一组**，不要按人拆开
+- answers 里是回答编号（从 1 开始）
 - 每个数组最多 3 条，没有就给空数组 []
-- 不要复述原文，不要评价哪个模型更好
-- conflict 里的 sides 用"一方/另一方"，不要出现真实模型名
+- 不要评价哪个模型更好
 """
 
 
-# 接地版提示词：要求每条分歧都给出能逐字回查的原文片段。
-# 弱模型倾向于"必须填点什么"，光靠提示词说"没有就写无"压不住；
-# 要求引用原文之后，编造的那部分在服务端会被校验掉。
 GROUP_DIVERGENCE_PROMPT_GROUNDED = """下面是 {n} 个模型对同一个问题的独立回答，请找出它们结论上真正矛盾的地方。
 
 问题：{query}
@@ -823,17 +827,41 @@ GROUP_DIVERGENCE_PROMPT_GROUNDED = """下面是 {n} 个模型对同一个问题�
   "consensus": ["所有回答结论一致的核心判断"],
   "conflict": [{{
     "point": "分歧点",
-    "sides": [
-      {{"from": 1, "quote": "回答1里的原句，逐字复制"}},
-      {{"from": 2, "quote": "回答2里的原句，逐字复制"}}
+    "groups": [
+      {{
+        "answers": [1, 3],
+        "stance": "这一方的立场，一句话",
+        "from": 1,
+        "quote": "回答1里逐字复制的一句原话"
+      }},
+      {{
+        "answers": [2],
+        "stance": "另一方的立场，一句话",
+        "from": 2,
+        "quote": "回答2里逐字复制的一句原话"
+      }}
     ]
   }}],
   "oneoff": ["只有一方给出、但会影响结论的具体事实或数字"]
 }}
 
-**硬性要求**：conflict 里的每个 quote 必须是原回答中逐字出现的片段（至少 10 个字），
-不许改写、不许缩写、不许用省略号。找不到能逐字引用的两句话，就说明这里没有分歧，不要列出。
-每个数组最多 3 条，没有就给空数组 []。不要评价哪个模型更好。"""
+**硬性要求**：
+- 相同立场的回答必须放进同一组（answers 里列全），不要把同一立场拆成两组
+- 每组的 quote 必须是该组某个回答里**逐字出现**的片段（至少 10 个字），不许改写、不许缩写、不许用省略号
+- 找不到能逐字引用的原话，就说明这里没有分歧，不要列出
+- 每个数组最多 3 条，没有就给空数组 []；不要评价哪个模型更好
+"""
+
+
+
+VERIFY_PROMPT = """下面两句话来自两个模型对同一个问题的回答。
+
+问题：{query}
+回答A：{a}
+回答B：{b}
+
+它们在这个点上的结论是否互相矛盾？
+只回答两个字：矛盾 或 不矛盾。不要解释。"""
 
 
 _PUNCT = set(" \t\n\r，。、；：\"'（）()【】《》!?！？,.;:[]{}—…·\x60")
@@ -848,7 +876,7 @@ def verify_quote(quote: str, source: str, min_chars: int = 10, fuzzy_ratio: floa
     """检查模型给的引文是否出自这份回答。
 
     先逐字比对；对不上时允许轻微改动（换标点、删虚词，最多两成字被改），
-    用最长公共子串衡量覆盖率。编造的句子覆盖率会很低，仍然挡得住。
+    用匹配字符总数衡量覆盖率。编造的句子覆盖率会很低，仍然挡得住。
     """
     q = _normalize_for_match(quote)
     if len(q) < min_chars:
@@ -862,7 +890,6 @@ def verify_quote(quote: str, source: str, min_chars: int = 10, fuzzy_ratio: floa
     sm = difflib.SequenceMatcher(None, q, s, autojunk=False)
     matched = sum(block.size for block in sm.get_matching_blocks())
     return matched >= fuzzy_ratio * len(q)
-    return match.size >= fuzzy_ratio * len(q)
 
 
 
@@ -924,12 +951,12 @@ def _quotes_conflict(verifier: str, query: str, sides) -> bool:
 
 
 def filter_divergence(data: dict, answers=None, verifier: str = "", query: str = "") -> tuple:
-    """接地校验 + 矛盾复核，返回 (过滤后的 data, 引文被丢弃条数, 复核被丢弃条数)。
+    """接地校验 + 矛盾复核，返回 (过滤后的 data, 引文未通过条数, 复核未通过条数)。
 
-    两个都不做时原样返回，方便对照实验。
+    groups 里每组的 quote 必须能在对应回答里回查到；查不到就把这条分歧整体降级为未核实。
     """
     if not isinstance(data, dict):
-        return data, 0
+        return data, 0, 0
 
     conflicts = []
     dropped_quote = 0
@@ -938,38 +965,53 @@ def filter_divergence(data: dict, answers=None, verifier: str = "", query: str =
         if not isinstance(item, dict):
             text_item = str(item).strip()
             if text_item:
-                conflicts.append({"point": text_item, "sides": []})
+                conflicts.append({"point": text_item, "groups": [], "verified": True})
             continue
         point = str(item.get("point") or "").strip()
-        kept = []
-        for side in (item.get("sides") or []):
-            if not isinstance(side, dict):
-                side_text = str(side).strip()
-                if side_text:
-                    kept.append({"from": 0, "quote": side_text})
+        groups = []
+        for group in (item.get("groups") or []):
+            if not isinstance(group, dict):
                 continue
-            quote = str(side.get("quote") or "").strip()
+            quotes = [str(group.get("quote") or "").strip()]
             try:
-                idx = int(side.get("from") or 0)
+                frm = int(group.get("from") or 0)
             except (TypeError, ValueError):
-                idx = 0
-            if not quote:
+                frm = 0
+            idxs = group.get("answers") or ([frm] if frm else [])
+            try:
+                idxs = [int(x) for x in idxs]
+            except (TypeError, ValueError):
+                idxs = []
+            idxs = [x for x in idxs if x > 0]
+            if not idxs and not quotes[0]:
                 continue
-            if answers is not None:
-                if not (1 <= idx <= len(answers) and verify_quote(quote, answers[idx - 1])):
-                    continue
-            kept.append({"from": idx, "quote": quote})
+            groups.append({
+                "answers": idxs,
+                "stance": str(group.get("stance") or "").strip(),
+                "from": frm,
+                "quote": quotes[0],
+            })
 
         verified = True
-        if answers is not None and len(kept) < 2:
-            verified = False
+        if answers is not None:
+            for group in groups:
+                if not group["quote"] or not group["from"]:
+                    verified = False
+                    break
+                if not (0 < group["from"] <= len(answers)):
+                    verified = False
+                    break
+                if not verify_quote(group["quote"], answers[group["from"] - 1]):
+                    verified = False
+                    break
+        if answers is not None and (len(groups) < 2 or not verified):
             dropped_quote += 1
-            continue
-        if verifier and not _quotes_conflict(verifier, query, kept):
+            verified = False
+        if verifier and verified and not _quotes_conflict(verifier, query, groups):
             dropped_verify += 1
             continue
-        if point or kept:
-            conflicts.append({"point": point, "sides": kept, "verified": verified})
+        if point or groups:
+            conflicts.append({"point": point, "groups": groups, "verified": verified})
 
     result = dict(data)
     result["conflict"] = conflicts
@@ -977,42 +1019,59 @@ def filter_divergence(data: dict, answers=None, verifier: str = "", query: str =
 
 
 def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: int = 0, labels=None) -> str:
-    """把解析后的 JSON 渲染成三块 markdown。
-
-    通过原文核对的放【分歧】，没通过的放【未核实】，后者标出来而不是丢掉——
-    因为复核也会误杀（两句互补的话也可能在结论上相反）。
-    """
+    """把解析后的 JSON 渲染成「共识 / 分歧 / 孤例」，分歧按立场分组。"""
     consensus = [str(x).strip() for x in (data.get("consensus") or []) if str(x).strip()]
     oneoff = [str(x).strip() for x in (data.get("oneoff") or []) if str(x).strip()]
+
+    def _names(idxs):
+        names = []
+        for idx in idxs:
+            if labels and 0 < idx <= len(labels):
+                names.append(labels[idx - 1])
+            else:
+                names.append("回答%d" % idx)
+        return "、".join(names) if names else "某方"
 
     confirmed, unconfirmed = [], []
     for item in (data.get("conflict") or []):
         if not isinstance(item, dict):
             continue
         point = str(item.get("point") or "").strip()
-        sides = []
-        for side in (item.get("sides") or []):
-            if not isinstance(side, dict):
+        rows = []
+        for group in (item.get("groups") or []):
+            if not isinstance(group, dict):
                 continue
-            quote = str(side.get("quote") or "").strip()
-            idx = side.get("from") or 0
-            if not quote:
+            idxs = group.get("answers") or []
+            stance = str(group.get("stance") or "").strip()
+            quote = str(group.get("quote") or "").strip()
+            if not idxs and not stance and not quote:
                 continue
-            if idx:
-                name = labels[idx - 1] if labels and 0 < idx <= len(labels) else "回答%d" % idx
-                sides.append("%s：「%s」" % (name, quote))
-            else:
-                sides.append(quote)
-        if not point and not sides:
+            rows.append((_names(idxs if idxs else [group.get("from") or 0]), stance, quote))
+        if not point and not rows:
             continue
-        (confirmed if item.get("verified", True) else unconfirmed).append((point, sides))
+        (confirmed if item.get("verified", True) else unconfirmed).append((point, rows))
+
+    def _block(title, items):
+        lines = [title]
+        for point, rows in items:
+            if point:
+                lines.append("- " + point)
+                prefix = "  "
+            else:
+                prefix = "- "
+            for name, stance, quote in rows:
+                head = prefix + "- " + name + ("（%s）" % stance if stance else "")
+                lines.append(head)
+                if quote:
+                    lines.append(prefix + "  - 「%s」" % quote)
+        return lines
 
     if not consensus and not confirmed and not oneoff:
         if unconfirmed:
-            name, sides = unconfirmed[0]
-            head = ("**未核实的分歧**（没通过原文核对，可能是误判）\n- " + (name or ""))
-            body = "\n".join("  - " + s for s in sides)
-            return "几个模型的结论没有实质冲突。" + ("\n\n" + head + ("\n" + body if body else ""))
+            return "\n".join(
+                ["几个模型的结论没有实质冲突。", ""]
+                + _block("**未核实的分歧**（没通过原文核对，可能是误判）", unconfirmed)
+            )
         return "几个模型的结论没有实质冲突。"
 
     out = []
@@ -1022,13 +1081,7 @@ def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: 
     if confirmed:
         if out:
             out.append("")
-        out.append("**分歧**")
-        for point, sides in confirmed:
-            if point:
-                out.append("- " + point)
-                out += ["  - " + s for s in sides]
-            else:
-                out += ["- " + s for s in sides]
+        out += _block("**分歧**", confirmed)
     if oneoff:
         if out:
             out.append("")
@@ -1037,15 +1090,8 @@ def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: 
     if unconfirmed:
         if out:
             out.append("")
-        out.append("**未核实的分歧**（没通过原文核对，可能是误判）")
-        for point, sides in unconfirmed:
-            if point:
-                out.append("- " + point)
-                out += ["  - " + s for s in sides]
-            else:
-                out += ["- " + s for s in sides]
+        out += _block("**未核实的分歧**（没通过原文核对，可能是误判）", unconfirmed)
     return "\n".join(out)
-
 
 def render_divergence(raw_text: str, answers=None, verifier: str = "", query: str = "", labels=None) -> str:
     """解析 → 过滤 → 渲染。解析失败时原样返回模型输出。"""
