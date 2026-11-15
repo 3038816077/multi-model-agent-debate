@@ -104,6 +104,10 @@ ENABLE_USER_MEMORY = os.getenv("ENABLE_USER_MEMORY", "1") != "0"
 # 关掉时间/算术的确定性快速通道。对照实验用：否则单模型在这些题上不调模型就算对
 ENABLE_FAST_REPLY = os.getenv("ENABLE_FAST_REPLY", "1") != "0"
 
+# 分歧分析用哪个模型：chief = 调用方指定的主模型（质量优先，慢一点）
+#                    cheap = 便宜档（快，但分析更浅）
+DIVERGENCE_MODEL = os.getenv("DIVERGENCE_MODEL", "chief").strip().lower()
+
 RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", 300))        # 文本切分大小
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", 50))   # 文本切分重叠度
 RAG_RECALL_TOP_K = int(os.getenv("RAG_RECALL_TOP_K", 10))     # 粗排召回数量

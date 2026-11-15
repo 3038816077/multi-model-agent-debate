@@ -10,7 +10,7 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
+from app.core.config import DIVERGENCE_MODEL, get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import (classify, pick_model, set_current_tier, log_usage,
                              estimate_cost, TIER_CHEAP, TIER_MID, TIER_STRONG)
@@ -786,46 +786,134 @@ GROUP_DIVERGENCE_PROMPT = """下面是 {n} 个模型对同一个问题的独立�
 判断标准只有一条：**结论是否互相矛盾**。
 - 说法不同但结论一致，不算分歧
 - 一个说得详细、另一个没展开，不算分歧，也不算孤例
-- 不要因为“某个回答没提到某一点”就判定成分歧或孤例
+- 不要因为"某个回答没提到某一点"就判定成分歧或孤例
 
-严格按下面三段输出，每段没有内容就写“无”：
+只输出 JSON，不要输出任何解释文字，也不要包代码块。结构如下：
 
-【共识】所有回答结论一致的核心判断，一到两句
-【分歧】结论互相冲突的点，格式：某问题：回答1认为X，回答2认为Y
-【孤例】只有一方给出的具体事实或数字，其他回答既没支持也没否定，但会影响结论
+{{
+  "consensus": ["所有回答结论一致的核心判断，每条一句话"],
+  "conflict": [{{"point": "分歧点", "sides": ["一方认为…", "另一方认为…"]}}],
+  "oneoff": ["只有一方给出、但会影响结论的具体事实或数字"]
+}}
 
-全文不超过 200 字，不要复述原文，不要评价哪个模型更好。"""
+要求：
+- 每个数组最多 3 条，没有就给空数组 []
+- 不要复述原文，不要评价哪个模型更好
+- conflict 里的 sides 用"一方/另一方"，不要出现真实模型名
+"""
+
+
+def _strip_code_fence(text: str) -> str:
+    """模型经常把 JSON 包在代码块里，先剥掉。"""
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+    return text.strip()
+
+
+def render_divergence(raw_text: str) -> str:
+    """把分歧分析的 JSON 渲染成分块 markdown；解析失败就原样返回。"""
+    text = _strip_code_fence(raw_text)
+    if not text:
+        return ""
+    start_i, end_i = text.find("{"), text.rfind("}")
+    if start_i < 0 or end_i <= start_i:
+        return text
+    try:
+        data = json.loads(text[start_i:end_i + 1])
+    except Exception:
+        return text
+    if not isinstance(data, dict):
+        return text
+
+    consensus = [str(x).strip() for x in (data.get("consensus") or []) if str(x).strip()]
+    oneoff = [str(x).strip() for x in (data.get("oneoff") or []) if str(x).strip()]
+    conflicts = []
+    for item in (data.get("conflict") or []):
+        if isinstance(item, dict):
+            point = str(item.get("point") or "").strip()
+            sides = [str(s).strip() for s in (item.get("sides") or []) if str(s).strip()]
+            if point or sides:
+                conflicts.append((point, sides))
+        elif str(item).strip():
+            conflicts.append((str(item).strip(), []))
+
+    if not consensus and not conflicts and not oneoff:
+        return "几个模型的结论没有实质冲突。"
+
+    out = []
+    if consensus:
+        out.append("**共识**")
+        out += ["- " + c for c in consensus]
+    if conflicts:
+        if out:
+            out.append("")
+        out.append("**分歧**")
+        for point, sides in conflicts:
+            if point:
+                out.append("- " + point)
+                out += ["  - " + s for s in sides]
+            else:
+                out += ["- " + s for s in sides]
+    if oneoff:
+        if out:
+            out.append("")
+        out.append("**孤例**")
+        out += ["- " + o for o in oneoff]
+    return "\n".join(out)
 
 
 async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
-                             fallback_model: str = "") -> str:
-    """用便宜模型比对多份独立回答，挑出共识、分歧和孤例。"""
+                             fallback_model: str = "") -> tuple:
+    """比对多份独立回答，挑出共识、分歧和孤例。
+
+    返回 (渲染后的 markdown, 实际使用的模型 key)。
+
+    优先用调用方指定的主模型：分歧分析是并行模式的主要产出，用最便宜的档位来做是错配。
+    主模型失败时才退回便宜档。
+    """
     if not answers:
-        return ""
-    judge = pick_model(TIER_CHEAP) or fallback_model
-    if not judge:
-        return "（当前注册表里没有可用的便宜模型，跳过分歧分析）"
+        return "", ""
+    candidates = []
+    cheap = pick_model(TIER_CHEAP)
+    order = (fallback_model, cheap) if DIVERGENCE_MODEL == "chief" else (cheap, fallback_model)
+    for name in order:
+        if name and name not in candidates:
+            candidates.append(name)
+    if not candidates:
+        return "（当前注册表里没有可用模型，跳过分歧分析）", ""
+
+    def call_model(judge: str) -> str:
+        client = get_client_for_model(judge)
+        body = "\n\n".join(
+            "【回答%d】\n%s" % (i + 1, (ans or "")[:DIVERGENCE_ANSWER_MAX_CHARS])
+            for i, ans in enumerate(answers.values())
+        )
+        prompt = GROUP_DIVERGENCE_PROMPT.format(n=len(answers), query=query, answers=body)
+        started = time.time()
+        resp = client.chat.completions.create(
+            model=resolve_model_id(judge),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=get_model_max_tokens(judge, 800),
+            **_model_extra(judge),
+        )
+        _log_resp(resp, judge, trace_id, started)
+        return extract_answer_text(resp)
 
     def sync_call():
-        started = time.time()
-        try:
-            client = get_client_for_model(judge)
-            body = "\n\n".join(
-                "【回答%d】\n%s" % (i + 1, (ans or "")[:DIVERGENCE_ANSWER_MAX_CHARS])
-                for i, ans in enumerate(answers.values())
-            )
-            prompt = GROUP_DIVERGENCE_PROMPT.format(n=len(answers), query=query, answers=body)
-            resp = client.chat.completions.create(
-                model=resolve_model_id(judge),
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
-                **_model_extra(judge),
-            )
-            _log_resp(resp, judge, trace_id, started)
-            return extract_answer_text(resp)
-        except Exception as e:
-            logger.warning(f"【并行模式】分歧分析失败：{e}")
-            return "分歧分析失败：" + friendly_llm_error(e, judge)
+        last_error = None
+        for judge in candidates:
+            try:
+                text = call_model(judge)
+                if text:
+                    return render_divergence(text), judge
+                last_error = "%s 返回空内容" % judge
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"【并行模式】分歧分析在 {judge} 上失败，尝试下一个：{e}")
+        return "分歧分析失败：" + friendly_llm_error(Exception(last_error or ""), candidates[0]), candidates[0]
 
     return await asyncio.to_thread(sync_call)
 
@@ -956,10 +1044,10 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             # 反而低 0.87 分（研讨 − 并行 = −0.87，95% CI [-1.29, -0.44]），成本还翻倍。
             # 多模型的价值全部来自"多个模型独立作答"，所以到这里直接分析共识与分歧。
             yield f"data: {json.dumps({'event': 'stage', 'data': '分歧分析'}, ensure_ascii=False)}\n\n"
-            divergence = await analyze_divergence(
+            divergence, divergence_model = await analyze_divergence(
                 state["query"], valid_answers, current_trace_id, request_body.chief_model
             )
-            yield f"data: {json.dumps({'event': 'divergence', 'content': divergence}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'event': 'divergence', 'content': divergence, 'model': divergence_model}, ensure_ascii=False)}\n\n"
 
             for m, ans in state["first_round"].items():
                 save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:1:{m}")

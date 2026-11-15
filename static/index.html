@@ -981,7 +981,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                             if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
                             const wrap = document.createElement('div');
                             wrap.className = 'summary-msg';
-                            wrap.innerHTML = '<div class="summary-title">🔍 共识与分歧（自动分析）</div>' +
+                            wrap.innerHTML = '<div class="summary-title">🔍 共识与分歧' + (payload.model ? '（' + escapeHtml(modelDisplayName(payload.model)) + ' 分析）' : '（自动分析）') + '</div>' +
                                 '<div class="markdown-body message-text" style="color:#9ca3af;">分析中...</div>';
                             chatMessages.appendChild(wrap);
                             typewriterEffect(wrap.querySelector('.message-text'), payload.content || '');
