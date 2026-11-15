@@ -108,6 +108,10 @@ ENABLE_FAST_REPLY = os.getenv("ENABLE_FAST_REPLY", "1") != "0"
 #                    cheap = 便宜档（快，但分析更浅）
 DIVERGENCE_MODEL = os.getenv("DIVERGENCE_MODEL", "chief").strip().lower()
 
+# 分歧复核：每条分歧再让一个模型判一次「这两句真的矛盾吗」，不通过就丢弃。
+# 留空 = 不复核；填注册表里的模型 key 即可开启。复核失败的条目会保留，避免误杀。
+DIVERGENCE_VERIFIER = os.getenv("DIVERGENCE_VERIFIER", "").strip()
+
 RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", 300))        # 文本切分大小
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", 50))   # 文本切分重叠度
 RAG_RECALL_TOP_K = int(os.getenv("RAG_RECALL_TOP_K", 10))     # 粗排召回数量

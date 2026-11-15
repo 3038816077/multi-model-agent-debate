@@ -10,7 +10,7 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import DIVERGENCE_MODEL, get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
+from app.core.config import DIVERGENCE_MODEL, DIVERGENCE_VERIFIER, get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import (classify, pick_model, set_current_tier, log_usage,
                              estimate_cost, TIER_CHEAP, TIER_MID, TIER_STRONG)
@@ -803,6 +803,69 @@ GROUP_DIVERGENCE_PROMPT = """下面是 {n} 个模型对同一个问题的独立�
 """
 
 
+# 接地版提示词：要求每条分歧都给出能逐字回查的原文片段。
+# 弱模型倾向于"必须填点什么"，光靠提示词说"没有就写无"压不住；
+# 要求引用原文之后，编造的那部分在服务端会被校验掉。
+GROUP_DIVERGENCE_PROMPT_GROUNDED = """下面是 {n} 个模型对同一个问题的独立回答，请找出它们结论上真正矛盾的地方。
+
+问题：{query}
+
+{answers}
+
+判断标准只有一条：**结论是否互相矛盾**。
+- 说法不同但结论一致，不算分歧
+- 一个说得详细、另一个没展开，不算分歧，也不算孤例
+- 不要因为"某个回答没提到某一点"就判定成分歧或孤例
+
+只输出 JSON，不要输出任何解释文字，也不要包代码块：
+
+{{
+  "consensus": ["所有回答结论一致的核心判断"],
+  "conflict": [{{
+    "point": "分歧点",
+    "sides": [
+      {{"from": 1, "quote": "回答1里的原句，逐字复制"}},
+      {{"from": 2, "quote": "回答2里的原句，逐字复制"}}
+    ]
+  }}],
+  "oneoff": ["只有一方给出、但会影响结论的具体事实或数字"]
+}}
+
+**硬性要求**：conflict 里的每个 quote 必须是原回答中逐字出现的片段（至少 10 个字），
+不许改写、不许缩写、不许用省略号。找不到能逐字引用的两句话，就说明这里没有分歧，不要列出。
+每个数组最多 3 条，没有就给空数组 []。不要评价哪个模型更好。"""
+
+
+_PUNCT = set(" \t\n\r，。、；：\"'（）()【】《》!?！？,.;:[]{}—…·\x60")
+
+
+def _normalize_for_match(text: str) -> str:
+    """去掉空白和标点再比对：模型引用时常会动引号或逗号。"""
+    return "".join(ch for ch in (text or "") if ch not in _PUNCT)
+
+
+def verify_quote(quote: str, source: str, min_chars: int = 10, fuzzy_ratio: float = 0.8) -> bool:
+    """检查模型给的引文是否出自这份回答。
+
+    先逐字比对；对不上时允许轻微改动（换标点、删虚词，最多两成字被改），
+    用最长公共子串衡量覆盖率。编造的句子覆盖率会很低，仍然挡得住。
+    """
+    q = _normalize_for_match(quote)
+    if len(q) < min_chars:
+        return False
+    s = _normalize_for_match(source)
+    if not s:
+        return False
+    if q in s:
+        return True
+    import difflib
+    sm = difflib.SequenceMatcher(None, q, s, autojunk=False)
+    matched = sum(block.size for block in sm.get_matching_blocks())
+    return matched >= fuzzy_ratio * len(q)
+    return match.size >= fuzzy_ratio * len(q)
+
+
+
 def _strip_code_fence(text: str) -> str:
     """模型经常把 JSON 包在代码块里，先剥掉。"""
     text = (text or "").strip()
@@ -813,8 +876,13 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
-def render_divergence(raw_text: str) -> str:
-    """把分歧分析的 JSON 渲染成分块 markdown；解析失败就原样返回。"""
+def render_divergence(raw_text: str, answers=None) -> str:
+    """把分歧分析的 JSON 渲染成分块 markdown。
+
+    传入 answers（按【回答1】【回答2】顺序）时做接地校验：
+    每条分歧必须引用两侧原文且能逐字回查到，引不到的整条丢弃。
+    弱模型编出来的分歧通常引不出原文，这一步能把它们筛掉。
+    """
     text = _strip_code_fence(raw_text)
     if not text:
         return ""
@@ -828,30 +896,150 @@ def render_divergence(raw_text: str) -> str:
     if not isinstance(data, dict):
         return text
 
+VERIFY_PROMPT = """下面两句话来自两个模型对同一个问题的回答。
+
+问题：{query}
+回答A：{a}
+回答B：{b}
+
+它们在这个点上的结论是否互相矛盾？
+只回答两个字：矛盾 或 不矛盾。不要解释。"""
+
+
+def _parse_divergence(raw_text: str):
+    """把模型输出解析成 dict；解析不出来返回 None。"""
+    text = _strip_code_fence(raw_text)
+    if not text:
+        return None
+    start_i, end_i = text.find("{"), text.rfind("}")
+    if start_i < 0 or end_i <= start_i:
+        return None
+    try:
+        data = json.loads(text[start_i:end_i + 1])
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _quotes_conflict(verifier: str, query: str, sides) -> bool:
+    """让另一个模型判一次：这两句话的结论真的矛盾吗？"""
+    if len(sides) < 2:
+        return False
+    prompt = VERIFY_PROMPT.format(query=query, a=sides[0]["quote"], b=sides[1]["quote"])
+    try:
+        client = get_client_for_model(verifier)
+        resp = client.chat.completions.create(
+            model=resolve_model_id(verifier),
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=32,
+            **_model_extra(verifier),
+        )
+        answer = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.warning("【并行模式】分歧复核失败，保留该条：%s" % e)
+        return True
+    if not answer:
+        return True
+    return not answer.startswith("不")
+
+
+def filter_divergence(data: dict, answers=None, verifier: str = "", query: str = "") -> tuple:
+    """接地校验 + 矛盾复核，返回 (过滤后的 data, 引文被丢弃条数, 复核被丢弃条数)。
+
+    两个都不做时原样返回，方便对照实验。
+    """
+    if not isinstance(data, dict):
+        return data, 0
+
+    conflicts = []
+    dropped_quote = 0
+    dropped_verify = 0
+    for item in (data.get("conflict") or []):
+        if not isinstance(item, dict):
+            text_item = str(item).strip()
+            if text_item:
+                conflicts.append({"point": text_item, "sides": []})
+            continue
+        point = str(item.get("point") or "").strip()
+        kept = []
+        for side in (item.get("sides") or []):
+            if not isinstance(side, dict):
+                side_text = str(side).strip()
+                if side_text:
+                    kept.append({"from": 0, "quote": side_text})
+                continue
+            quote = str(side.get("quote") or "").strip()
+            try:
+                idx = int(side.get("from") or 0)
+            except (TypeError, ValueError):
+                idx = 0
+            if not quote:
+                continue
+            if answers is not None:
+                if not (1 <= idx <= len(answers) and verify_quote(quote, answers[idx - 1])):
+                    continue
+            kept.append({"from": idx, "quote": quote})
+
+        verified = True
+        if answers is not None and len(kept) < 2:
+            verified = False
+            dropped_quote += 1
+            continue
+        if verifier and not _quotes_conflict(verifier, query, kept):
+            dropped_verify += 1
+            continue
+        if point or kept:
+            conflicts.append({"point": point, "sides": kept, "verified": verified})
+
+    result = dict(data)
+    result["conflict"] = conflicts
+    return result, dropped_quote, dropped_verify
+
+
+def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: int = 0) -> str:
+    """把解析后的 JSON 渲染成三块 markdown。
+
+    通过原文核对的放【分歧】，没通过的放【未核实】，后者标出来而不是丢掉——
+    因为复核也会误杀（两句互补的话也可能在结论上相反）。
+    """
     consensus = [str(x).strip() for x in (data.get("consensus") or []) if str(x).strip()]
     oneoff = [str(x).strip() for x in (data.get("oneoff") or []) if str(x).strip()]
-    conflicts = []
-    for item in (data.get("conflict") or []):
-        if isinstance(item, dict):
-            point = str(item.get("point") or "").strip()
-            sides = [str(s).strip() for s in (item.get("sides") or []) if str(s).strip()]
-            if point or sides:
-                conflicts.append((point, sides))
-        elif str(item).strip():
-            conflicts.append((str(item).strip(), []))
 
-    if not consensus and not conflicts and not oneoff:
+    confirmed, unconfirmed = [], []
+    for item in (data.get("conflict") or []):
+        if not isinstance(item, dict):
+            continue
+        point = str(item.get("point") or "").strip()
+        sides = []
+        for side in (item.get("sides") or []):
+            if not isinstance(side, dict):
+                continue
+            quote = str(side.get("quote") or "").strip()
+            idx = side.get("from") or 0
+            if not quote:
+                continue
+            sides.append("回答%d：「%s」" % (idx, quote) if idx else quote)
+        if not point and not sides:
+            continue
+        (confirmed if item.get("verified", True) else unconfirmed).append((point, sides))
+
+    if not consensus and not confirmed and not oneoff:
+        if unconfirmed:
+            name, sides = unconfirmed[0]
+            head = ("**未核实的分歧**（没通过原文核对，可能是误判）\n- " + (name or ""))
+            body = "\n".join("  - " + s for s in sides)
+            return "几个模型的结论没有实质冲突。" + ("\n\n" + head + ("\n" + body if body else ""))
         return "几个模型的结论没有实质冲突。"
 
     out = []
     if consensus:
         out.append("**共识**")
         out += ["- " + c for c in consensus]
-    if conflicts:
+    if confirmed:
         if out:
             out.append("")
         out.append("**分歧**")
-        for point, sides in conflicts:
+        for point, sides in confirmed:
             if point:
                 out.append("- " + point)
                 out += ["  - " + s for s in sides]
@@ -862,7 +1050,27 @@ def render_divergence(raw_text: str) -> str:
             out.append("")
         out.append("**孤例**")
         out += ["- " + o for o in oneoff]
+    if unconfirmed:
+        if out:
+            out.append("")
+        out.append("**未核实的分歧**（没通过原文核对，可能是误判）")
+        for point, sides in unconfirmed:
+            if point:
+                out.append("- " + point)
+                out += ["  - " + s for s in sides]
+            else:
+                out += ["- " + s for s in sides]
     return "\n".join(out)
+
+
+def render_divergence(raw_text: str, answers=None, verifier: str = "", query: str = "") -> str:
+    """解析 → 过滤 → 渲染。解析失败时原样返回模型输出。"""
+    data = _parse_divergence(raw_text)
+    if data is None:
+        return _strip_code_fence(raw_text)
+    data, dropped_quote, dropped_verify = filter_divergence(data, answers, verifier, query)
+    return _render_divergence_data(data, dropped_quote, dropped_verify)
+
 
 
 async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
@@ -891,7 +1099,9 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
             "【回答%d】\n%s" % (i + 1, (ans or "")[:DIVERGENCE_ANSWER_MAX_CHARS])
             for i, ans in enumerate(answers.values())
         )
-        prompt = GROUP_DIVERGENCE_PROMPT.format(n=len(answers), query=query, answers=body)
+        prompt = GROUP_DIVERGENCE_PROMPT_GROUNDED.format(
+            n=len(answers), query=query, answers=body
+        )
         started = time.time()
         resp = client.chat.completions.create(
             model=resolve_model_id(judge),
@@ -908,7 +1118,8 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
             try:
                 text = call_model(judge)
                 if text:
-                    return render_divergence(text), judge
+                    verifier = DIVERGENCE_VERIFIER if DIVERGENCE_VERIFIER not in ("", judge) else ""
+                    return render_divergence(text, list(answers.values()), verifier, query), judge
                 last_error = "%s 返回空内容" % judge
             except Exception as e:
                 last_error = str(e)
