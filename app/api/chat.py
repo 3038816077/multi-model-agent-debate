@@ -10,12 +10,12 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
+from app.core.config import get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import (classify, pick_model, set_current_tier, log_usage,
                              estimate_cost, TIER_CHEAP, TIER_MID, TIER_STRONG)
 from app.core.logger import logger, set_trace
-from app.core.utils import clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory, extract_user_memory
+from app.core.utils import extract_answer_text, clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory, extract_user_memory
 from app.tools.calc import get_current_time, calculate_expression
 from app.tools.registry import WEATHER_CACHE
 from app.agent.graph import agent_app
@@ -822,7 +822,7 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
                 **_model_extra(judge),
             )
             _log_resp(resp, judge, trace_id, started)
-            return resp.choices[0].message.content or ""
+            return extract_answer_text(resp)
         except Exception as e:
             logger.warning(f"【并行模式】分歧分析失败：{e}")
             return "分歧分析失败：" + friendly_llm_error(e, judge)
@@ -919,11 +919,16 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                         resp = client.chat.completions.create(
                             model=resolve_model_id(model_name),
                             messages=[{"role": "user", "content": prompt}],
-                            max_tokens=2048,
+                            max_tokens=get_model_max_tokens(model_name),
                             **_model_extra(model_name)
                         )
                         _log_resp(resp, model_name, current_trace_id, _t0)
-                        return model_name, resp.choices[0].message.content, True
+                        text = extract_answer_text(resp)
+                        if not text:
+                            # 思考型模型可能把输出额度全用在推理上，正文为空：
+                            # 当作失败处理，否则前端会渲染一个空气泡
+                            return model_name, f"⚠️ {model_name} 返回了空内容（可能把输出额度全用在思考上，可调大它的 max_tokens）", False
+                        return model_name, text, True
                     except Exception as e:
                         return model_name, friendly_llm_error(e, model_name), False
                 return await asyncio.to_thread(sync_call)

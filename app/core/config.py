@@ -44,6 +44,32 @@ def get_model_registry():
         return {}
 
 
+def _lookup_model_config(model_name: str) -> dict:
+    """按注册表 key 找配置；找不到就按 model 字段反查（传进来的可能是真实模型名）。"""
+    registry = get_model_registry()
+    config = registry.get(model_name) or {}
+    if not config:
+        for entry in registry.values():
+            if entry.get("model") == model_name:
+                return entry
+    return config
+
+
+def get_model_max_tokens(model_name: str, default: int = 2048) -> int:
+    """注册表可以给单个模型指定输出上限。
+
+    思考型模型（DeepSeek V4.1 Flash、Kimi K3.1 Pro 等）会先把大量输出 token
+    花在推理上，2048 很容易被思考吃光，正文返回空字符串——HTTP 200，
+    但用户看到一个空气泡。给这类模型调大即可。
+    """
+    config = _lookup_model_config(model_name)
+    try:
+        value = int(config.get("max_tokens") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return value or default
+
+
 def get_model_extra_body(model_name: str) -> dict:
     """注册表里可以给单个模型追加请求参数，例如关掉深度思考：
 
@@ -55,15 +81,7 @@ def get_model_extra_body(model_name: str) -> dict:
     豆包 2.1 Pro/Lite 默认开启深度思考，一次简单问答要 20 秒以上；
     关掉之后同样的请求 1.5 秒内返回。
     """
-    registry = get_model_registry()
-    config = registry.get(model_name) or {}
-    if not config:
-        # 传进来的可能是解析后的真实模型名（例如注册表 key 是 qwen-plus，
-        # 实际发给厂商的是 qwen3.8-flash），按 model 字段反查一次
-        for entry in registry.values():
-            if entry.get("model") == model_name:
-                config = entry
-                break
+    config = _lookup_model_config(model_name)
     extra = config.get("extra_body")
     return extra if isinstance(extra, dict) else {}
 

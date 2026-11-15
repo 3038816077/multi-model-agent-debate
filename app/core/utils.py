@@ -165,3 +165,33 @@ def extract_user_memory(messages: list, existing_memory: str = "") -> str:
             pass
         return existing_memory
     return "\n".join(kept)[:MAX_USER_MEMORY_CHARS]
+
+
+def extract_answer_text(response) -> str:
+    """取出模型正文，并处理"思考吃光输出额度"的情况。
+
+    思考型模型有时把 max_tokens 全部花在 reasoning_content 上，正文 content 返回空字符串——
+    上层看到的是一次成功调用，用户看到的却是一个空气泡。
+    这里回退到思考内容并显式说明，让问题可见而不是静默通过。
+    """
+    try:
+        choice = response.choices[0]
+    except (AttributeError, IndexError):
+        return ""
+
+    content = (getattr(choice.message, "content", None) or "").strip()
+    if content:
+        return content
+
+    reasoning = (
+        getattr(choice.message, "reasoning_content", None)
+        or getattr(choice.message, "reasoning", None)
+        or ""
+    )
+    reasoning = reasoning.strip() if isinstance(reasoning, str) else ""
+    if reasoning:
+        return (
+            "⚠️ 该模型把全部输出额度用在了思考上，正文为空。"
+            "以下是它的思考过程（可在注册表里给它配更大的 max_tokens）：\n\n" + reasoning
+        )
+    return ""

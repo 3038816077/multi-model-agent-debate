@@ -183,6 +183,7 @@ Every model comes from `MODEL_REGISTRY` in `.env` — **a single line of JSON**.
 
 Restart and it shows up in the dropdown and in the multi-model line-up — **no backend code changes**.
 
+- `max_tokens` (optional, default 2048): reasoning models (DeepSeek V4.1 Flash, Kimi K3.1 Pro) spend their whole output budget thinking and return an **empty `content`** — the call succeeds, the bubble is blank. Give those models 8192. If it still comes back empty the UI now says so instead of rendering nothing.
 - `model` (optional): the real model ID sent to the vendor. If omitted, the registry key is used as the model name.
 - `extra_body` (optional): appended to the request body verbatim. In the example above Doubao Seed 2.1 enables **deep thinking** by default, which turns one simple question into 20–60 seconds or a timeout; disabling it brings the same question down to 1–2 seconds.
 - To make a model the default selection, edit `DEFAULT_MODEL_ID` in `static/index.html`.
