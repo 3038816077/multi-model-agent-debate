@@ -12,7 +12,9 @@ def _get_limiter_key(request: Request):
     return f"ip:{get_remote_address(request)}"
 
 # 限流器初始化，使用自定义键策略
-limiter = Limiter(key_func=_get_limiter_key)
+# 评测/压测时可用 RATE_LIMIT_ENABLED=0 关闭限流，默认开启
+limiter = Limiter(key_func=_get_limiter_key,
+                  enabled=os.getenv("RATE_LIMIT_ENABLED", "1") != "0")
 
 async def verify_api_key(x_api_key: str = Header(None)):
     """API Key 鉴权依赖，未配置时自动跳过校验"""

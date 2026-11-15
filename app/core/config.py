@@ -80,6 +80,9 @@ def resolve_model_id(model_name: str) -> str:
     return config.get("model") or model_name
 
 # ========== RAG 检索配置 ==========
+# 评测/对照实验时设为 0：不读写跨会话记忆，避免并发请求互相污染上下文
+ENABLE_USER_MEMORY = os.getenv("ENABLE_USER_MEMORY", "1") != "0"
+
 RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", 300))        # 文本切分大小
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", 50))   # 文本切分重叠度
 RAG_RECALL_TOP_K = int(os.getenv("RAG_RECALL_TOP_K", 10))     # 粗排召回数量

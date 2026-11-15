@@ -39,18 +39,25 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 USAGE_LOG = os.path.join(REPO_ROOT, "data", "usage.jsonl")
-JUDGE_PROMPT = """你是一名严格的技术答案评审。下面是对同一个问题 THREE 份回答，分别标为 甲 / 乙 / 丙，顺序已打乱。
+JUDGE_PROMPT = """你在评审对同一个问题的 THREE 份回答，标为 甲 / 乙 / 丙，顺序已打乱。
+其中有些回答可能是多份并列答案拼在一起的（多个模型各自作答），这本身不代表它更好或更差。
 
-评分标准（1-10 分）：
-- 正确性 40%：有没有事实错误、逻辑错误
-- 完整性 30%：有没有遗漏关键点
-- 可执行性 20%：给出的内容能不能直接照着做
-- 简洁性 10%：有没有注水
+评分依据（参考要点，不是唯一正确答案，允许合理补充）：
 
-重要：不要因为回答更长就给更高分。有错误信息必须扣分。
+{ref}
 
-只输出 JSON，不要任何解释文字，格式：
-{"甲": {"score": 8, "reason": "一句话"}, "乙": {...}, "丙": {...}}
+评分维度（1-10 分）：
+- 准确性 50%：有没有与事实或参考要点冲突的错误。有硬错误直接低分。
+- 覆盖度 30%：命中了参考要点里的几项。
+- 可执行性 20%：能不能直接照着做。
+
+明确规则：
+- 参考要点之外的额外内容，如果不相关，不加分也不算错。
+- **篇幅长短不是评分因素**，不要因为更长或更短就给更高或更低的分。
+- 多份答案拼接造成的重复，最多扣 1 分。
+
+只输出 JSON，不要任何解释文字：
+{"甲": {"score": 8, "hit": "命中的要点", "error": "错误或无", "reason": "一句话"}, "乙": {...}, "丙": {...}}
 """
 
 
@@ -78,24 +85,29 @@ def usage_len():
         return sum(1 for _ in f)
 
 
-def usage_delta(start_line):
-    """读 usage.jsonl 从 start_line 之后的新增记录，汇总调用数 / token / 成本。"""
-    calls, tokens_in, tokens_out, cost = 0, 0, 0, 0.0
+def usage_index():
+    """把 usage.jsonl 读成 {trace_id: 这条请求的调用数/成本}。
+
+    按 trace_id 归因，而不是按文件行数增量——这样并发跑题也不会串账。
+    """
+    idx = {}
     if not os.path.exists(USAGE_LOG):
-        return dict(calls=0, tokens_in=0, tokens_out=0, cost=0.0)
+        return idx
     with open(USAGE_LOG, encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if i < start_line:
-                continue
+        for line in f:
             try:
                 rec = json.loads(line)
             except Exception:
                 continue
-            calls += 1
-            tokens_in += int(rec.get("prompt_tokens") or 0)
-            tokens_out += int(rec.get("completion_tokens") or 0)
-            cost += float(rec.get("cost_usd") or 0)
-    return dict(calls=calls, tokens_in=tokens_in, tokens_out=tokens_out, cost=cost)
+            tid = rec.get("trace_id") or ""
+            if not tid:
+                continue
+            cell = idx.setdefault(tid, dict(calls=0, tokens_in=0, tokens_out=0, cost=0.0))
+            cell["calls"] += 1
+            cell["tokens_in"] += int(rec.get("prompt_tokens") or 0)
+            cell["tokens_out"] += int(rec.get("completion_tokens") or 0)
+            cell["cost"] += float(rec.get("cost_usd") or 0)
+    return idx
 
 
 def post_json(url, payload, api_key, timeout):
@@ -141,7 +153,7 @@ def run_single(base, question, args, api_key):
     t0 = time.time()
     resp = post_json(base + "/chat", payload, api_key, args.timeout)
     elapsed = time.time() - t0
-    return resp.get("answer") or resp.get("error") or "", elapsed
+    return resp.get("answer") or resp.get("error") or "", elapsed, resp.get("trace_id")
 
 
 def run_group(base, question, mode, args, api_key):
@@ -156,6 +168,7 @@ def run_group(base, question, mode, args, api_key):
     elapsed = time.time() - t0
 
     speaks, summary, divergence, errors = [], "", "", []
+    trace_id = None
     for ev in events:
         kind = ev.get("event")
         if kind == "speak":
@@ -164,6 +177,8 @@ def run_group(base, question, mode, args, api_key):
             summary = ev.get("content") or summary
         elif kind == "divergence":
             divergence = ev.get("content") or divergence
+        elif kind == "done":
+            trace_id = ev.get("trace_id") or trace_id
         elif kind == "error":
             errors.append(str(ev.get("data")))
 
@@ -180,12 +195,12 @@ def run_group(base, question, mode, args, api_key):
 
     if not answer and errors:
         answer = "[请求失败] " + "; ".join(errors)
-    return answer, elapsed, len(speaks)
+    return answer, elapsed, len(speaks), trace_id
 
 
 # ---------------- 裁判 ----------------
 
-def judge_three(question, answers, judge_client, judge_model, timeout):
+def judge_three(question, answers, judge_client, judge_model, timeout, ref=""):
     """answers: {mode: text}。打乱顺序后匿名打分，返回 {mode: (score, reason)}。"""
     modes = list(answers.keys())
     labels = ["甲", "乙", "丙"][:len(modes)]
@@ -201,7 +216,7 @@ def judge_three(question, answers, judge_client, judge_model, timeout):
     resp = judge_client.chat.completions.create(
         model=judge_model,
         messages=[
-            {"role": "system", "content": JUDGE_PROMPT},
+            {"role": "system", "content": JUDGE_PROMPT.replace("{ref}", ref or "（本题未提供参考要点，请按你的知识判断）")},
             {"role": "user", "content": user_content},
         ],
         temperature=0.0,
@@ -224,23 +239,59 @@ def judge_three(question, answers, judge_client, judge_model, timeout):
 
 # ---------------- 主流程 ----------------
 
+def run_one(item, args, api_key, base, modes, judge_client, judge_model):
+    """跑一道题的三种模式并打分，返回一行结果。"""
+    qid, question, ref = item.get("id"), item.get("q"), item.get("ref", "")
+    answers, metas = {}, {}
+
+    for mode in modes:
+        trace_id = None
+        try:
+            if args.dry_run:
+                answers[mode] = "(dry-run) 假的%s答案" % mode
+                elapsed, speakers = 0.0, 0
+            elif mode == "single":
+                answers[mode], elapsed, trace_id = run_single(base, question, args, api_key)
+                speakers = 1
+            else:
+                answers[mode], elapsed, speakers, trace_id = run_group(base, question, mode, args, api_key)
+        except Exception as e:
+            answers[mode] = "[调用失败] %s" % e
+            elapsed, speakers = 0.0, 0
+        metas[mode] = dict(elapsed=elapsed, speakers=speakers, trace_id=trace_id)
+
+    if args.dry_run:
+        scores = {m: (random.uniform(6, 9), "dry-run") for m in modes}
+    else:
+        try:
+            scores = judge_three(question, answers, judge_client, judge_model, args.timeout, ref=ref)
+        except Exception as e:
+            scores = {m: (None, "judge failed: %s" % str(e)[:80]) for m in modes}
+
+    row = dict(id=qid, cat=item.get("cat"), q=question, ref=ref, modes={})
+    for m in modes:
+        sc, reason = scores.get(m, (None, ""))
+        row["modes"][m] = dict(answer=answers[m], score=sc, reason=reason, **metas[m])
+    return row
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--questions", default=os.path.join(REPO_ROOT, "eval", "debate_eval_set.jsonl"))
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 题（0 = 全部）")
     ap.add_argument("--chief", default=os.getenv("BENCH_CHIEF", "qwen-plus"))
-    ap.add_argument("--staff", nargs="+", default=[s for s in os.getenv("BENCH_STAFF", "").split(",") if s],
+    ap.add_argument("--staff", nargs="+", default=[x for x in os.getenv("BENCH_STAFF", "").split(",") if x],
                     help="副模型列表，空格分隔")
     ap.add_argument("--single-model", default=os.getenv("BENCH_SINGLE", ""),
                     help="单模型基线用哪个模型（留空则用服务端默认）")
     ap.add_argument("--judge-model", default=os.getenv("BENCH_JUDGE", ""),
                     help="裁判模型（建议用比被测模型更强的）")
     ap.add_argument("--modes", default="single,parallel,debate")
-    ap.add_argument("--timeout", type=int, default=180)
+    ap.add_argument("--concurrency", type=int, default=4,
+                    help="同时跑几道题（服务端记得 RATE_LIMIT_ENABLED=0）")
+    ap.add_argument("--timeout", type=int, default=300)
     ap.add_argument("--out", default=os.path.join(REPO_ROOT, "data", "debate_bench.json"))
-    ap.add_argument("--settle", type=float, default=3.0,
-                    help="每次请求后等待几秒再统计用量（后台记忆抽取是异步的）")
     ap.add_argument("--dry-run", action="store_true", help="不真的调用，用假答案跑通流程")
     args = ap.parse_args()
 
@@ -270,74 +321,65 @@ def main():
         entry = registry.get(judge_model) or {}
         if not entry:
             raise SystemExit("裁判模型 %s 不在 MODEL_REGISTRY 里，用 --judge-model 指定一个" % judge_model)
-        judge_client = OpenAI(
-            api_key=entry.get("api_key"), base_url=entry.get("base_url"), timeout=args.timeout)
+        judge_client = OpenAI(api_key=entry.get("api_key"), base_url=entry.get("base_url"),
+                              timeout=args.timeout)
         judge_model = entry.get("model") or judge_model
 
-    rows = []
-    for idx, item in enumerate(questions, 1):
-        qid, question = item.get("id"), item.get("q")
-        print("\n[%d/%d] %s  %s" % (idx, len(questions), qid, question[:40]))
-        answers, stats = {}, {}
-
-        for mode in modes:
-            start = usage_len()
+    t_start = time.time()
+    rows, done = [], 0
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as pool:
+        futures = {pool.submit(run_one, item, args, api_key, base, modes,
+                               judge_client, judge_model): item for item in questions}
+        for fut in as_completed(futures):
+            item = futures[fut]
+            done += 1
             try:
-                if args.dry_run:
-                    answers[mode] = "(dry-run) 这是一段假的%s答案，用于验证流程。" % mode
-                    elapsed, speakers = 0.0, 0
-                elif mode == "single":
-                    answers[mode], elapsed = run_single(base, question, args, api_key)
-                    speakers = 1
-                else:
-                    answers[mode], elapsed, speakers = run_group(base, question, mode, args, api_key)
+                row = fut.result()
             except Exception as e:
-                answers[mode] = "[调用失败] %s" % e
-                elapsed, speakers = 0.0, 0
-            if not args.dry_run and args.settle > 0:
-                time.sleep(args.settle)
-            usage = usage_delta(start)
-            stats[mode] = dict(elapsed=elapsed, speakers=speakers, **usage)
-            print("   %-9s %6.1fs  调用 %d  成本 %.6f  %d 字"
-                  % (mode, elapsed, usage["calls"], usage["cost"], len(answers[mode])))
+                print("[%d/%d] %s 失败: %s" % (done, len(questions), item.get("id"), e))
+                continue
+            rows.append(row)
+            brief = " ".join("%s=%s" % (m, ("%.1f" % row["modes"][m]["score"])
+                                        if row["modes"][m]["score"] is not None else "?")
+                             for m in modes)
+            print("[%d/%d] %s %-4s %s  (%.0fs)" % (
+                done, len(questions), row["id"], row.get("cat") or "", brief, time.time() - t_start))
 
-        if args.dry_run:
-            scores = {m: (random.uniform(6, 9), "dry-run") for m in modes}
-        else:
-            print("   裁判打分中 ...")
-            try:
-                scores = judge_three(question, answers, judge_client, judge_model, args.timeout)
-            except Exception as e:
-                print("   裁判失败: %s" % e)
-                scores = {m: (None, "judge failed: %s" % str(e)[:80]) for m in modes}
+    # 成本按 trace_id 归因
+    idx = {} if args.dry_run else usage_index()
+    for r in rows:
+        for m, v in r["modes"].items():
+            cell = idx.get(v.get("trace_id") or "", dict(calls=0, tokens_in=0, tokens_out=0, cost=0.0))
+            v["cost"] = cell["cost"]
+            v["calls"] = cell["calls"]
+            v["tokens_in"] = cell["tokens_in"]
+            v["tokens_out"] = cell["tokens_out"]
 
-        row = dict(id=qid, cat=item.get("cat"), q=question, modes={})
-        for m in modes:
-            row["modes"][m] = dict(
-                answer=answers[m], stats=stats[m],
-                score=scores.get(m, (None, ""))[0], reason=scores.get(m, (None, ""))[1])
-        rows.append(row)
-
-    # ---------------- 汇总 ----------------
-    print("\n" + "=" * 78)
+    rows.sort(key=lambda r: str(r["id"]))
+    print("")
+    print("=" * 84)
     print("%-10s %8s %12s %10s %10s %8s" % ("模式", "平均分", "平均成本($)", "平均耗时(s)", "平均调用", "样本"))
-    print("-" * 78)
+    print("-" * 84)
     for m in modes:
-        vals = [r["modes"][m] for r in rows]
-        sc = [v["score"] for v in vals if v["score"] is not None]
+        vals = [r["modes"][m] for r in rows if m in r["modes"]]
+        if not vals:
+            continue
+        sc = [v["score"] for v in vals if v.get("score") is not None]
         avg_score = sum(sc) / len(sc) if sc else float("nan")
-        avg_cost = sum(v["stats"]["cost"] for v in vals) / len(vals)
-        avg_time = sum(v["stats"]["elapsed"] for v in vals) / len(vals)
-        avg_calls = sum(v["stats"]["calls"] for v in vals) / len(vals)
+        avg_cost = sum(v["cost"] for v in vals) / len(vals)
+        avg_time = sum(v["elapsed"] for v in vals) / len(vals)
+        avg_calls = sum(v["calls"] for v in vals) / len(vals)
         ratio = ("%.0f" % (avg_score / avg_cost)) if avg_cost > 0 else "-"
         print("%-10s %8.2f %12.6f %10.1f %10.1f %8d   (分/美元 %s)"
               % (m, avg_score, avg_cost, avg_time, avg_calls, len(sc), ratio))
-    print("=" * 78)
+    print("=" * 84)
+    print("总耗时 %.1f 分钟 | 并发 %d" % ((time.time() - t_start) / 60, args.concurrency))
 
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(dict(args=vars(args), rows=rows), f, ensure_ascii=False, indent=2)
-    print("\n明细已写入: %s" % args.out)
-    print("提示：裁判分不是真理。抽 3-5 条看 reason 字段，确认和你自己的判断一致。")
+    print("明细已写入: %s" % args.out)
+    print("提示：裁判分不是真理。看 analyze_bench.py 的分类表，再抽 3-5 条核对 reason。")
 
 
 if __name__ == "__main__":

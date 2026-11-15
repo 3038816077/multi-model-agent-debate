@@ -138,7 +138,7 @@ def extract_user_memory(messages: list, existing_memory: str = "") -> str:
         **extra
     )
     text = (resp.choices[0].message.content or "").strip()
-    if text in ("", "无", "没有"):
+    if text in ("", "无", "没有", "[]", "{}", "null", "None"):
         return existing_memory
 
     # 关键防线：模型偶尔会返回一串只有项目符号、没有内容的东西（"- \n- \n- "），

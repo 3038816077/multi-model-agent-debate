@@ -10,7 +10,7 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
+from app.core.config import ENABLE_USER_MEMORY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import (classify, pick_model, set_current_tier, log_usage,
                              estimate_cost, TIER_CHEAP, TIER_MID, TIER_STRONG)
@@ -460,7 +460,7 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
 
     db_session = get_or_create_session(db, session_id)
     memory_text = db_session.long_term_memory
-    user_memory = get_user_memory(db)
+    user_memory = get_user_memory(db) if ENABLE_USER_MEMORY else ""
     memory_prompt = _compose_memory_prompt(user_memory, memory_text)
     if memory_prompt:
         messages.insert(1, {"role": "system", "content": memory_prompt})
@@ -556,7 +556,7 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
             new_memory = extract_long_term_memory(final_messages, memory_text)
             update_long_term_memory(db, session_id, new_memory)
             new_user_memory = extract_user_memory(final_messages, user_memory)
-            if new_user_memory:
+            if new_user_memory and ENABLE_USER_MEMORY:
                 update_user_memory(db, new_user_memory)
         except Exception as e:
             logger.warning(f"长期记忆更新失败：{str(e)}")
@@ -600,7 +600,7 @@ async def _update_memory_bg(session_id: str, final_messages: list, memory_text: 
         bg_db = SessionLocal()
         try:
             update_long_term_memory(bg_db, session_id, new_memory)
-            if new_user_memory:
+            if new_user_memory and ENABLE_USER_MEMORY:
                 update_user_memory(bg_db, new_user_memory)
         finally:
             bg_db.close()
@@ -635,7 +635,7 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
 
     db_session = get_or_create_session(db, session_id)
     memory_text = db_session.long_term_memory
-    user_memory = get_user_memory(db)
+    user_memory = get_user_memory(db) if ENABLE_USER_MEMORY else ""
     memory_prompt = _compose_memory_prompt(user_memory, memory_text)
     if memory_prompt:
         messages.insert(1, {"role": "system", "content": memory_prompt})
@@ -850,7 +850,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     save_message(db, session_id, "user", request_body.message)
 
     # 跨会话记忆拼在 query 最前面：首轮 / 互评 / 首席总结三个阶段都自动带上
-    _user_memory = get_user_memory(db)
+    _user_memory = get_user_memory(db) if ENABLE_USER_MEMORY else ""
     group_query = request_body.message
     if _user_memory:
         group_query = f"【用户长期信息（跨会话）】\n{_user_memory}\n\n{group_query}"
@@ -946,7 +946,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                              f"GROUP_DIVERGENCE:{request_body.chief_model}")
                 _schedule_group_memory(session_id, request_body.message, valid_answers)
 
-                yield f"data: {json.dumps({'event': 'done', 'session_id': session_id})}\n\n"
+                yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id})}\n\n"
                 return
 
             # ---------------- 阶段二：第二轮交叉讨论 ----------------
@@ -1026,7 +1026,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             _schedule_group_memory(session_id, request_body.message,
                                    dict(state["first_round"], **state["discussion"]))
 
-            yield f"data: {json.dumps({'event': 'done', 'session_id': session_id})}\n\n"
+            yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id})}\n\n"
 
         except Exception as e:
             logger.error(f"研讨流异常: {e}", exc_info=True)
