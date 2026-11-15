@@ -129,7 +129,6 @@ class GroupChatRequest(BaseModel):
     staff_models: List[str]
     # debate  = 独立作答 → 交叉互评 → 首席总结（默认，质量最高）
     # parallel = 只并行作答 → 自动提取共识与分歧（快、省，不做互评）
-    mode: str = "debate"
 
 def get_db():
     db = SessionLocal()
@@ -831,8 +830,8 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
     return await asyncio.to_thread(sync_call)
 
 
-# ==================== 3. 多模型研讨流式接口 ====================
-@router.post("/chat/group_stream", summary="多模型研讨流式接口")
+# ==================== 3. 多模型并行流式接口 ====================
+@router.post("/chat/group_stream", summary="多模型并行流式接口")
 @limiter.limit("10/minute")
 async def chat_group_stream(request: Request, request_body: GroupChatRequest, db: Session = Depends(get_db)):
     current_trace_id = set_trace()
@@ -844,7 +843,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
         return f"{label}({name})" if label and label != name else name
 
     logger.info(
-        f"【研讨模式启动】主模型:{_tag(request_body.chief_model)}, "
+        f"【多模型并行启动】主模型:{_tag(request_body.chief_model)}, "
         f"副模型:{[_tag(m) for m in request_body.staff_models]}"
     )
     
@@ -856,7 +855,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     group_query = request_body.message
     if _user_memory:
         group_query = f"【用户长期信息（跨会话）】\n{_user_memory}\n\n{group_query}"
-    # 上传的文档：整段拼进 query，三个阶段（首轮作答 / 交叉研讨 / 首席总结）都能看到原文
+    # 上传的文档：整段拼进 query，各模型独立作答和分歧分析都能看到原文
     if request_body.attachment_id:
         doc = load_document(request_body.attachment_id)
         if doc:
@@ -871,7 +870,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                 "请所有专家基于以上文档内容回答下面的问题；文档里没有的信息要明确说明“文档中未提及”，不要编造。\n\n"
                 f"用户问题：{request_body.message}"
             )
-            logger.info(f"【研讨模式】已注入文档 {doc['filename']}（{doc.get('chars', 0)} 字，截断={cut}）")
+            logger.info(f"【多模型并行】已注入文档 {doc['filename']}（{doc.get('chars', 0)} 字，截断={cut}）")
         else:
             logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
 
@@ -881,16 +880,16 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
         return StreamingResponse(error_gen(), media_type="text/event-stream")
 
     # 确定性任务（时间/纯算术）不需要开会：直接给答案，不调用任何模型。
-    # 单模型和研讨两条路径共用同一个快速通道，避免同一个问题换个按钮行为就变。
+    # 单模型和多模型两条路径共用同一个快速通道，避免同一个问题换个按钮行为就变。
     _fast = _build_fast_reply(request_body.message) if ENABLE_FAST_REPLY else None
     if _fast:
         _fast_answer, _fast_thought, _fast_meta = _fast
-        logger.info(f"【研讨模式】命中快速通道：{_fast_meta.get('rule')}，未调用模型")
+        logger.info(f"【多模型并行】命中快速通道：{_fast_meta.get('rule')}，未调用模型")
 
         async def fast_gen():
             yield f"data: {json.dumps({'event': 'stage', 'data': '确定性快速通道'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'event': 'fast_path', 'data': _fast_meta}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'event': 'summary', 'model': request_body.chief_model, 'content': _fast_answer}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'event': 'fast_answer', 'model': request_body.chief_model, 'content': _fast_answer}, ensure_ascii=False)}\n\n"
             save_message(db, session_id, "assistant", _fast_answer, _fast_thought)
             yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id, 'fast_path': _fast_meta.get('rule')}, ensure_ascii=False)}\n\n"
 
@@ -904,7 +903,6 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                 "staff_models": request_body.staff_models,
                 "first_round": {},
                 "discussion": {},
-                "final_summary": "",
                 "failed_models": []
             }
 
@@ -935,7 +933,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                 m_name, content, ok = await future
                 state["first_round"][m_name] = content
                 if not ok:
-                    # 失败的回答只用于前端展示，不参与后续研讨（否则错误文案会被当成“观点”喂给别的模型）
+                    # 失败的回答只用于前端展示，不参与后续分歧分析（否则错误文案会被当成“观点”喂给别的模型）
                     state["failed_models"].append(m_name)
                 yield f"data: {json.dumps({'event': 'speak', 'stage': 1, 'model': m_name, 'content': content}, ensure_ascii=False)}\n\n"
 
@@ -948,106 +946,27 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                 yield f"data: {json.dumps({'event': 'error', 'data': '所有副模型均失败，无法继续。'})}\n\n"
                 return
 
-            # ---------------- 并行模式：只作答，不互评 ----------------
-            # 走到这里说明第一轮已经全部返回。直接做分歧分析然后收尾，
-            # 后面的第二轮、首席总结整段跳过。
-            if (request_body.mode or "debate").strip().lower() == "parallel":
-                yield f"data: {json.dumps({'event': 'stage', 'data': '分歧分析'}, ensure_ascii=False)}\n\n"
-                divergence = await analyze_divergence(
-                    state["query"], valid_answers, current_trace_id, request_body.chief_model
-                )
-                yield f"data: {json.dumps({'event': 'divergence', 'content': divergence}, ensure_ascii=False)}\n\n"
+            # ---------------- 分歧分析（唯一的收尾阶段）----------------
+            # 为什么没有首席总结：60 题实测（见 eval/REPORT.md）显示，把三份答案压成一份
+            # 反而低 0.87 分（研讨 − 并行 = −0.87，95% CI [-1.29, -0.44]），成本还翻倍。
+            # 多模型的价值全部来自"多个模型独立作答"，所以到这里直接分析共识与分歧。
+            yield f"data: {json.dumps({'event': 'stage', 'data': '分歧分析'}, ensure_ascii=False)}\n\n"
+            divergence = await analyze_divergence(
+                state["query"], valid_answers, current_trace_id, request_body.chief_model
+            )
+            yield f"data: {json.dumps({'event': 'divergence', 'content': divergence}, ensure_ascii=False)}\n\n"
 
-                for m, ans in state["first_round"].items():
-                    save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:1:{m}")
-                save_message(db, session_id, "assistant", divergence or "",
-                             f"GROUP_DIVERGENCE:{request_body.chief_model}")
-                _schedule_group_memory(session_id, request_body.message, valid_answers)
-
-                yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id})}\n\n"
-                return
-
-            # ---------------- 阶段二：第二轮交叉讨论 ----------------
-            yield f"data: {json.dumps({'event': 'stage', 'data': '第二轮：交叉研讨'}, ensure_ascii=False)}\n\n"
-            active_models_2 = list(valid_answers.keys())
-            yield f"data: {json.dumps({'event': 'init_models', 'models': active_models_2}, ensure_ascii=False)}\n\n"
-
-            async def run_discussion(model_name):
-                def sync_call():
-                    try:
-                        client = get_client_for_model(model_name)
-                        context_str = ""
-                        for m, ans in valid_answers.items():
-                            if m != model_name:
-                                context_str += f"【{m} 的观点】：\n{ans}\n\n"
-                        prompt = f"针对问题：{state['query']}\n\n其他专家的第一轮观点如下：\n{context_str}\n\n请你基于以上信息，发表你的补充意见，或者指出他们可能存在的漏洞。请保持专业客观。"
-                        _t0 = time.time()
-                        resp = client.chat.completions.create(
-                            model=resolve_model_id(model_name),
-                            messages=[{"role": "user", "content": prompt}],
-                            max_tokens=2048,
-                            **_model_extra(model_name)
-                        )
-                        _log_resp(resp, model_name, current_trace_id, _t0)
-                        return model_name, resp.choices[0].message.content
-                    except Exception as e:
-                        return model_name, friendly_llm_error(e, model_name)
-                return await asyncio.to_thread(sync_call)
-
-            tasks_2 = [run_discussion(m) for m in active_models_2]
-            for future in asyncio.as_completed(tasks_2):
-                m_name, content = await future
-                state["discussion"][m_name] = content
-                yield f"data: {json.dumps({'event': 'speak', 'stage': 2, 'model': m_name, 'content': content}, ensure_ascii=False)}\n\n"
-
-            # ---------------- 阶段三：主模型总结 ----------------
-            yield f"data: {json.dumps({'event': 'stage', 'data': '首席总结'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'event': 'init_summary', 'model': request_body.chief_model}, ensure_ascii=False)}\n\n"
-
-            def run_summary():
-                try:
-                    client = get_client_for_model(request_body.chief_model)
-                    prompt = f"用户提出了以下问题：{state['query']}\n\n"
-                    prompt += "=== 第一阶段：专家独立观点 ===\n"
-                    for m, ans in valid_answers.items():
-                        prompt += f"[{m}]: {ans}\n"
-                    prompt += "\n=== 第二阶段：专家交叉研讨 ===\n"
-                    for m, ans in state["discussion"].items():
-                        prompt += f"[{m}]: {ans}\n"
-                    prompt += "\n作为首席总结官，请你综合以上所有专家的意见，去粗取精，剔除错误信息，给用户输出一份逻辑清晰、结构完整的最终回答。不要提及具体专家的名字，直接以最终结论的形式输出。请使用 Markdown 格式。"
-
-                    _t0 = time.time()
-                    resp = client.chat.completions.create(
-                        model=resolve_model_id(request_body.chief_model),
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=2048,
-                        **_model_extra(request_body.chief_model)
-                    )
-                    _log_resp(resp, request_body.chief_model, current_trace_id, _t0)
-                    return resp.choices[0].message.content
-                except Exception as e:
-                    return "总结失败: " + friendly_llm_error(e, request_body.chief_model)
-
-            summary_content = await asyncio.to_thread(run_summary)
-            state["final_summary"] = summary_content
-            
-            yield f"data: {json.dumps({'event': 'summary', 'model': request_body.chief_model, 'content': summary_content}, ensure_ascii=False)}\n\n"
-            
-            # 存库：每位专家单独一条，thought_process 里带阶段和模型名，
-            # 这样重新打开会话时前端能还原成同样的头像气泡，而不是一大坨纯文本
             for m, ans in state["first_round"].items():
                 save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:1:{m}")
-            for m, ans in state["discussion"].items():
-                save_message(db, session_id, "assistant", ans or "", f"GROUP_SPEAK:2:{m}")
-            save_message(db, session_id, "assistant", summary_content or "",
-                         f"GROUP_SUMMARY:{request_body.chief_model}")
-            _schedule_group_memory(session_id, request_body.message,
-                                   dict(state["first_round"], **state["discussion"]))
+            save_message(db, session_id, "assistant", divergence or "",
+                         f"GROUP_DIVERGENCE:{request_body.chief_model}")
+            _schedule_group_memory(session_id, request_body.message, valid_answers)
 
             yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id})}\n\n"
 
+
         except Exception as e:
-            logger.error(f"研讨流异常: {e}", exc_info=True)
+            logger.error(f"多模型并行流异常: {e}", exc_info=True)
             yield f"data: {json.dumps({'event': 'error', 'data': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

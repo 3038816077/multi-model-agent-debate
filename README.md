@@ -2,9 +2,9 @@
 
 # Multi-Model Agent Debate
 
-### Several LLMs answer on their own, critique each other, then a chief model writes the final answer
+### Several LLMs answer the same question blind to each other — then a cheap model tells you where they agree and where they don't
 
-<sub>A ready-to-run multi-model debate agent: LangGraph orchestration · Hybrid RAG (BM25 + FAISS + reranking) · direct Word / PDF Q&A · SSE streaming · persistent sessions</sub>
+<sub>A ready-to-run multi-model agent: parallel experts across vendors · consensus / conflict reporting · Hybrid RAG (BM25 + FAISS + reranking) · direct Word / PDF Q&A · SSE streaming · persistent sessions</sub>
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)
@@ -22,43 +22,42 @@
 
 ![UI preview](docs/preview.png)
 
-## 💡 Why not just ask the same model twice
+## 💡 Why multiple models — and why no chief summary
 
-Asking a model to check its own answer rarely works — **it can hardly overturn itself**. Same weights, same blind spots; re-reading it ten times lands on the same gap.
+Asking a model to check its own answer rarely works: **it can hardly overturn itself.** Same weights, same blind spots.
 
-This project takes a different route:
-
-> Let GPT, Claude, Qwen and DeepSeek **answer the same question at the same time**, then have them **read each other's answers and look for flaws**, and finally a chief model synthesizes the result.
-
-The disagreements that come from different vendors and different training data are the valuable part — wherever the answers diverge is usually where the original answer is least reliable.
+So let several models from **different vendors** answer the same question, blind to each other. Where they diverge is usually where a single answer is least reliable.
 
 ```text
 user question
-   ├─ round 1: N expert models answer independently (they cannot see each other)
-   ├─ round 2: each expert reads the others and adds to them or pushes back
-   └─ round 3: the chief model drops what is wrong and writes one final answer
+   ├─ round 1: N models from different vendors answer independently (blind to each other)
+   └─ round 2: a cheap model reads all of them and reports consensus / conflicts / one-offs
 ```
+
+**The obvious next step — have a chief model merge everything into one answer — turns out to be a net loss.** This repo measures it instead of asserting it: 60 questions, 3 modes, one fixed judge, paired comparison, 95% CI.
+
+| Mode | Mean score | Cost / question |
+| --- | --- | --- |
+| Single model | 5.77 | $0.00024 |
+| **Models in parallel + consensus / conflict report** | **8.27** | $0.0247 |
+| Parallel + cross-review + chief summary | 7.40 | $0.0462 |
+
+> parallel − single = **+2.50** [+1.92, +3.08]
+> debate − parallel = **−0.87** [−1.29, −0.44] — the summary *lost* 0.87 points and doubled the cost
+
+The mechanism is compression: the chief squeezes ~7,000 characters of expert output into ~4,000, drops the qualifiers that made each claim correct, and turns "A wins when X" into "A wins". The judge flagged exactly that — *"over-confident thresholds", "outright technical errors", "absolutist claims"* — on every one of the worst cases.
+
+**So this project keeps the part that pays (independent answers from different vendors) and drops the part that does not (the chief summary).** Full report, method and limitations: [eval/REPORT.md](eval/REPORT.md).
 
 ## 🔬 How it works
 
-![workflow](docs/debate-flow.svg)
-
 | Stage | What happens | Why it matters |
 | --- | --- | --- |
-| Round 1 · independent answers | All staff models answer in parallel, blind to each other | Keeps the views **independent**, so nobody copies a neighbour |
-| Round 2 · cross-review | Each model reads the others and points out holes or adds detail | Surfaces each single model's **blind spot** |
-| Round 3 · chief summary | The chief model merges everything and removes what is wrong | Produces **one** structured final answer |
+| Round 1 · independent answers | All participating models answer in parallel, blind to each other | Keeps the views **independent**, so nobody copies a neighbour |
+| Round 2 · consensus / conflict report | A cheap model reads every answer and groups the points into **agreed / conflicting / one-off** | Shows *where the models disagree*, which is the useful signal — without flattening it into one answer |
 
-Each round is rendered as its own block, **a later round never overwrites an earlier one**. The whole debate streams to the browser over SSE, and a page refresh restores it completely from the database (avatars, model names, every bubble).
+Each answer is rendered as its own block with the model's identity, **nothing is overwritten**. Everything streams over SSE, and a page refresh restores it from the database (avatars, model names, every bubble).
 
-### Two ways to run the panel
-
-| Mode | What it does | When to use it |
-| --- | --- | --- |
-| **Debate** (default) | Independent answers → cross-review → chief summary | You want one answer you can trust |
-| **Parallel compare** | Independent answers only, then a cheap model extracts **consensus / disagreements / one-offs** | You want to see *where the models disagree* — and it costs far less |
-
-Parallel compare skips the review and summary rounds entirely: about **40% fewer model calls** than a full debate.
 
 ## 🔍 What the agent actually did
 
@@ -111,8 +110,8 @@ Both layers are merged into a single system message at request time, so the prom
 
 | | Capability | Description |
 | --- | --- | --- |
-| 🗣️ | **Multi-model debate** | One chief model + any number of staff models, three-stage cross-validation, line-up can be changed at any time |
-| ⚡ | **Parallel compare** | Only round 1 (independent answers, no cross-review), then a cheap model extracts **consensus / disagreements / one-offs**; ~40% fewer model calls than a full debate |
+| 🗣️ | **Multi-model parallel** | 2–3 models from different vendors answer independently, then a cheap model reports **consensus / conflicts / one-offs** |
+| 📊 | **Measured, not asserted** | 60-question, 3-mode, fixed-judge benchmark with 95% CIs in [`eval/REPORT.md`](eval/REPORT.md) — including the result that the chief-summary round **lost** 0.87 points |
 | 🧭 | **Tiered model routing** | Picks a tier from task complexity: translation and summaries go to free models, code and design go to strong ones. Off by default, behind an `auto_route` flag. **Measured on 16 tasks: 13.6% cheaper, 3.8% quality drop** |
 | 📄 | **Document Q&A** | Upload `.docx` / `.pdf` / `.txt` from the UI; Word is parsed with the standard library (no extra dependency), PDF is extracted page by page with page numbers. **Works in both single-model and debate mode** |
 | 🔍 | **Three-stage RAG** | Query rewrite → BM25 + FAISS dual recall → Cross-Encoder rerank, aimed at proper nouns that plain vector search misses |
@@ -180,7 +179,7 @@ Every model comes from `MODEL_REGISTRY` in `.env` — **a single line of JSON**.
 }
 ```
 
-Restart and it shows up in the dropdown and in the debate line-up — **no backend code changes**.
+Restart and it shows up in the dropdown and in the multi-model line-up — **no backend code changes**.
 
 - `model` (optional): the real model ID sent to the vendor. If omitted, the registry key is used as the model name.
 - `extra_body` (optional): appended to the request body verbatim. In the example above Doubao Seed 2.1 enables **deep thinking** by default, which turns one simple question into 20–60 seconds or a timeout; disabling it brings the same question down to 1–2 seconds.
@@ -323,8 +322,8 @@ The price table lives in `MODEL_PRICE_PER_M` in [`app/core/router.py`](app/core/
 **Q: Doubao and other thinking models are slow and keep timing out.**
 Add `"extra_body":{"thinking":{"type":"disabled"}}` to the registry entry to turn deep thinking off, or raise `LLM_TIMEOUT` in `.env` (default 60 seconds).
 
-**Q: Debate mode does nothing, or history shows one blob of text.**
-Each debate utterance is written to the database as its own row, so a refresh or a session switch restores the expert bubbles. **Sessions created before that change are still concatenated text** — that is a historical data-format difference.
+**Q: This used to be a debate mode with a chief summary — where did it go?**
+It was removed on purpose. On 60 questions the summary round scored **0.87 points lower** than plain parallel answers (95% CI [−1.29, −0.44]) while doubling the cost — see [`eval/REPORT.md`](eval/REPORT.md). Each model answer is still written to the database as its own row, so a refresh or a session switch restores every bubble.
 
 **Q: `python-multipart` will not install — is upload broken?**
 No. Document upload goes through a base64 JSON channel and does not need `python-multipart`.

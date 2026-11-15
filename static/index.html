@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>多模型研讨 Agent</title>
+    <title>多模型 Agent</title>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
 :root {
@@ -112,7 +112,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 }
 .settings-btn:hover { background: #fff; border-color: #c7d2fe; color: var(--primary); box-shadow: 0 8px 18px -12px rgba(79, 70, 229, .9); }
 
-/* ---------- 研讨配置条 ---------- */
+/* ---------- 多模型配置条 ---------- */
 .group-info-bar {
     display: none; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 28px;
     background: linear-gradient(90deg, #f5f3ff, #eef2ff); border-bottom: 1px solid #e0e7ff; font-size: 12px;
@@ -206,7 +206,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 .step-args { color: var(--muted); }
 .step-result { border-top: 1px dashed var(--line); padding-top: 5px; }
 
-/* ---------- 多模型研讨 ---------- */
+/* ---------- 多模型并行 ---------- */
 .stage-divider {
     text-align: center; font-size: 12.5px; font-weight: 700; letter-spacing: .03em;
     color: var(--violet); margin: 22px 0 6px; padding-bottom: 2px;
@@ -317,7 +317,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 }
 .attach-remove:hover { background: #fff; color: #dc2626; }
 
-/* ---------- 研讨配置面板 ---------- */
+/* ---------- 并行配置面板 ---------- */
 #groupSetupPanel {
     display: none; flex: 1; flex-direction: column; gap: 16px; padding: 24px;
     background:
@@ -389,12 +389,12 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 <div class="brand">
                     <div class="brand-logo">🧠</div>
                     <div>
-                        <div class="brand-name">多模型研讨 Agent</div>
+                        <div class="brand-name">多模型 Agent</div>
                         <div class="brand-sub">Multi-Model Debate</div>
                     </div>
                 </div>
                 <button class="new-chat-btn" onclick="createNewChat()">＋ 新对话（普通）</button>
-                <button class="new-chat-btn secondary" onclick="createGroupChat()">🧠 研讨对话（多模型）</button>
+                <button class="new-chat-btn secondary" onclick="createGroupChat()">🧠 并行对话（多模型）</button>
             </div>
             <div class="session-list" id="sessionList"></div>
         </div>
@@ -402,13 +402,13 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         <div class="chat-container">
             <div class="chat-header">
                 <div>
-                    <div class="title" id="chatTitle">多模型研讨 Agent</div>
+                    <div class="title" id="chatTitle">多模型 Agent</div>
                     <div class="subtitle" id="chatSubtitle">基于 LangGraph + ReAct | 深度流式输出</div>
                 </div>
                 <button class="settings-btn" onclick="openSettings()">⚙️ 自定义配置</button>
             </div>
 
-            <!-- 多模型研讨会话的配置条：一眼看出主模型 / 副模型 -->
+            <!-- 多模型会话话的配置条：一眼看出主模型 / 副模型 -->
             <div class="group-info-bar" id="groupInfoBar">
                 <span class="gi-label">👑 主模型</span>
                 <span class="gi-chip chief" id="giChief">-</span>
@@ -429,24 +429,17 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             
             <div id="groupSetupPanel">
                 <div class="setup-card">
-                    <h3>🧠 配置多模型研讨</h3>
+                    <h3>🧠 配置多模型并行</h3>
                     <div class="setup-group">
-                        <label>👑 首席总结模型 (主模型)</label>
+                        <label>👑 主模型（负责分歧分析）</label>
                         <select id="chiefModelSelect"></select>
                     </div>
                     <div class="setup-group">
-                        <label>👥 研讨专家模型 (副模型，选2-3个)</label>
+                        <label>👥 参与模型 (副模型，选2-3个)</label>
                         <div id="staffModelsCheckboxes" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
-                    <div class="setup-group">
-                        <label>⚙️ 运行模式</label>
-                        <select id="groupModeSelect">
-                            <option value="debate" selected>研讨：独立作答 → 交叉互评 → 首席总结（质量优先）</option>
-                            <option value="parallel">并行对比：只作答 → 自动找共识与分歧（速度优先）</option>
-                        </select>
-                    </div>
                     <div class="setup-tips">提示：主模型不可与副模型重复。配置发送首条消息后将锁定。</div>
-                    <button class="start-btn" onclick="startGroupChatSession()">开始研讨</button>
+                    <button class="start-btn" onclick="startGroupChatSession()">开始并行</button>
                 </div>
             </div>
 
@@ -651,7 +644,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             return m ? m.label : id;
         }
 
-        // 聊天区顶部显示当前研讨会话的主/副模型
+        // 聊天区顶部显示当前多模型会话的主/副模型
         function updateGroupInfoBar() {
             const bar = document.getElementById('groupInfoBar');
             if (!bar) return;
@@ -676,7 +669,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             try { localStorage.setItem('group_cfg_' + id, JSON.stringify(groupConfig)); } catch (e) {}
         }
 
-        // 切回历史会话时恢复“这是不是研讨会话”
+        // 切回历史会话时恢复“这是不是多模型会话”
         function restoreGroupConfig(id) {
             const raw = id ? localStorage.getItem('group_cfg_' + id) : null;
             if (raw) {
@@ -689,7 +682,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         function updateLayoutForMode() {
             updateGroupInfoBar();
             if (isGroupMode) {
-                chatTitle.textContent = "多模型研讨会议";
+                chatTitle.textContent = "多模型会话话";
                 chatSubtitle.textContent = "专家独立作答 -> 交叉讨论 -> 首席总结";
                 quickBtns.style.display = 'none';
                 modelSelectWrapper.style.display = 'none'; 
@@ -705,7 +698,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     inputWrapper.style.display = 'none';
                 }
             } else {
-                chatTitle.textContent = "多模型研讨 Agent";
+                chatTitle.textContent = "多模型 Agent";
                 chatSubtitle.textContent = "基于 LangGraph + ReAct | 深度流式输出";
                 quickBtns.style.display = 'flex';
                 modelSelectWrapper.style.display = 'flex';
@@ -783,10 +776,9 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 return;
             }
 
-            const groupMode = (document.getElementById('groupModeSelect') || {}).value || 'debate';
-            groupConfig = { chief: chiefModel, staffs: staffModels, mode: groupMode };
+            groupConfig = { chief: chiefModel, staffs: staffModels };
             updateLayoutForMode();
-            chatMessages.innerHTML = `<div class="message ai">✅ 研讨配置完成。主模型: ${chiefModel} | 副模型: ${staffModels.join(', ')}。<br>请在下方输入您的议题，开始研讨。</div>`;
+            chatMessages.innerHTML = `<div class="message ai">✅ 配置完成。主模型: ${chiefModel} | 副模型: ${staffModels.join(', ')}。<br>请在下方输入您的议题，开始并行。</div>`;
             userInput.focus();
         }
 
@@ -856,7 +848,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             }, speed);
         }
 
-        // ==================== 多模型研讨 ====================
+        // ==================== 多模型并行 ====================
         // 每一轮各自一个容器，"轮次::模型" 作为唯一键：
         // 后一轮永远只往自己的容器里写，物理上不可能覆盖前一轮的 DOM。
         async function sendGroupMessage() {
@@ -883,7 +875,6 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             const roundBlocks = new Map();   // 轮次 -> 容器 div
             const roundBubbles = new Map();  // "轮次::模型" -> 文本节点
             let currentRound = 1;
-            let summaryBubble = null;
 
             function scrollBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
 
@@ -914,7 +905,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 msgWrapper.innerHTML = `
                     <div class="model-avatar" style="background-color: ${visual.color}20; color: ${visual.color}; border: 1px solid ${visual.color}50;">${visual.icon}</div>
                     <div class="model-content-wrapper">
-                        <div class="model-name-tag" style="color: ${visual.color};">${visual.name}${round === 2 ? ' · 研讨' : ''}</div>
+                        <div class="model-name-tag" style="color: ${visual.color};">${visual.name}</div>
                         <div class="markdown-body message-text" style="color: #9ca3af;">思考中<span class="thinking-dots"><span></span><span></span><span></span></span></div>
                     </div>
                 `;
@@ -925,21 +916,6 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 return textEl;
             }
 
-            function ensureSummary(model) {
-                if (summaryBubble) return summaryBubble;
-                const block = ensureBlock(currentRound);
-                const visual = getModelVisual(model);
-                const summaryWrapper = document.createElement('div');
-                summaryWrapper.className = 'summary-msg';
-                summaryWrapper.innerHTML = `
-                    <div class="summary-title">👑 首席总结 (${visual.name})</div>
-                    <div class="markdown-body message-text" style="color: #9ca3af;">正在提炼结论<span class="thinking-dots"><span></span><span></span><span></span></span></div>
-                `;
-                block.appendChild(summaryWrapper);
-                summaryBubble = summaryWrapper.querySelector('.message-text');
-                scrollBottom();
-                return summaryBubble;
-            }
 
             try {
                 const response = await fetch('/chat/group_stream', {
@@ -951,7 +927,6 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         staff_models: groupConfig.staffs,
                         session_id: sessionId,
                         attachment_id: docId,
-                        mode: (groupConfig && groupConfig.mode) || 'debate'
                     }),
                     signal: currentAbortController.signal
                 });
@@ -996,18 +971,10 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         else if (payload.event === 'init_models') {
                             (payload.models || []).forEach(m => ensureBubble(currentRound, m));
                         }
-                        else if (payload.event === 'init_summary') {
-                            if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
-                            ensureSummary(payload.model);
-                        }
                         else if (payload.event === 'speak') {
                             // 用帧里自带的 stage 定位轮次，不依赖 currentStage 的到达顺序
                             const round = payload.stage || currentRound;
                             const targetDiv = ensureBubble(round, payload.model);
-                            typewriterEffect(targetDiv, payload.content || '');
-                        }
-                        else if (payload.event === 'summary') {
-                            const targetDiv = ensureSummary(payload.model);
                             typewriterEffect(targetDiv, payload.content || '');
                         }
                         else if (payload.event === 'divergence') {
@@ -1020,11 +987,21 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                             typewriterEffect(wrap.querySelector('.message-text'), payload.content || '');
                             scrollBottom();
                         }
+                        else if (payload.event === 'fast_answer') {
+                            if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
+                            const wrap = document.createElement('div');
+                            wrap.className = 'summary-msg';
+                            wrap.innerHTML = '<div class="summary-title">⚡ 确定性快速通道（未调用模型）</div>' +
+                                '<div class="markdown-body message-text"></div>';
+                            chatMessages.appendChild(wrap);
+                            typewriterEffect(wrap.querySelector('.message-text'), payload.content || '');
+                            scrollBottom();
+                        }
                         else if (payload.event === 'error') {
                             if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
                             const errDiv = document.createElement('div');
                             errDiv.className = 'message ai';
-                            errDiv.textContent = '研讨失败：' + (payload.data || '未知错误');
+                            errDiv.textContent = '并行失败：' + (payload.data || '未知错误');
                             chatMessages.appendChild(errDiv);
                             scrollBottom();
                         }
@@ -1336,13 +1313,13 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             if (isGenerating) return;
             sessionId = id;
             localStorage.setItem('agent_session_id', id);
-            restoreGroupConfig(id);   // 研讨会话切回来仍然显示主/副模型
+            restoreGroupConfig(id);   // 多模型会话切回来仍然显示主/副模型
             updateLayoutForMode();
             await loadHistory(id);
             await loadSessionList();
         }
         
-        // ==================== 研讨历史还原（和实时渲染同一套样式） ====================
+        // ==================== 并行历史还原（和实时渲染同一套样式） ====================
         function histBlock(round, label, map) {
             if (map.has(round)) return map.get(round);
             const block = document.createElement('div');
@@ -1357,7 +1334,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         }
 
         function histSpeak(round, model, content, map) {
-            const label = round === 2 ? '第二轮：交叉研讨' : '第一轮：专家独立作答';
+            const label = round === 2 ? '第二轮：交叉互评' : '各模型独立作答';
             const block = histBlock(round, label, map);
             const visual = getModelVisual(model);
             const wrapper = document.createElement('div');
@@ -1365,7 +1342,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             wrapper.innerHTML = `
                 <div class="model-avatar" style="color: ${visual.color}; border: 1px solid ${visual.color}50;">${visual.icon}</div>
                 <div class="model-content-wrapper">
-                    <div class="model-name-tag" style="color: ${visual.color};">${escapeHtml(visual.name)}${round === 2 ? ' · 研讨' : ''}</div>
+                    <div class="model-name-tag" style="color: ${visual.color};">${escapeHtml(visual.name)}</div>
                     <div class="markdown-body message-text">${renderMarkdown(content || '')}</div>
                 </div>`;
             block.appendChild(wrapper);

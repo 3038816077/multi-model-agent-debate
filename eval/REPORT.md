@@ -75,6 +75,24 @@
 
 **每一类都是并行优于研讨**，没有例外。
 
+## 已落地到产品
+
+结论写进代码了，不是只写在报告里：
+
+| 改动 | 内容 |
+|---|---|
+| 删除 | 首席总结阶段、交叉互评阶段、运行模式选择器 |
+| 保留 | 多模型独立作答 + 共识/分歧报告 |
+| 改名 | 「研讨」→「并行」，中英文 README 同步 |
+| 顺手删 | `app/agent/group_graph.py` 里未被调用、且 `chief_summary` 引用了未定义变量 `model_name` 的 LangGraph 版本（一调用就 NameError） |
+
+现在的 SSE 事件序列：
+
+```
+stage → init_models → speak×N → stage(分歧分析) → divergence → done
+```
+
+确定性快速通道命中时：`stage → fast_path → fast_answer → done`（不调用任何模型）。
 ## 对产品的建议
 
 ```
