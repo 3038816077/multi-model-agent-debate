@@ -876,26 +876,6 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
-def render_divergence(raw_text: str, answers=None) -> str:
-    """把分歧分析的 JSON 渲染成分块 markdown。
-
-    传入 answers（按【回答1】【回答2】顺序）时做接地校验：
-    每条分歧必须引用两侧原文且能逐字回查到，引不到的整条丢弃。
-    弱模型编出来的分歧通常引不出原文，这一步能把它们筛掉。
-    """
-    text = _strip_code_fence(raw_text)
-    if not text:
-        return ""
-    start_i, end_i = text.find("{"), text.rfind("}")
-    if start_i < 0 or end_i <= start_i:
-        return text
-    try:
-        data = json.loads(text[start_i:end_i + 1])
-    except Exception:
-        return text
-    if not isinstance(data, dict):
-        return text
-
 VERIFY_PROMPT = """下面两句话来自两个模型对同一个问题的回答。
 
 问题：{query}
@@ -996,7 +976,7 @@ def filter_divergence(data: dict, answers=None, verifier: str = "", query: str =
     return result, dropped_quote, dropped_verify
 
 
-def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: int = 0) -> str:
+def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: int = 0, labels=None) -> str:
     """把解析后的 JSON 渲染成三块 markdown。
 
     通过原文核对的放【分歧】，没通过的放【未核实】，后者标出来而不是丢掉——
@@ -1018,7 +998,11 @@ def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: 
             idx = side.get("from") or 0
             if not quote:
                 continue
-            sides.append("回答%d：「%s」" % (idx, quote) if idx else quote)
+            if idx:
+                name = labels[idx - 1] if labels and 0 < idx <= len(labels) else "回答%d" % idx
+                sides.append("%s：「%s」" % (name, quote))
+            else:
+                sides.append(quote)
         if not point and not sides:
             continue
         (confirmed if item.get("verified", True) else unconfirmed).append((point, sides))
@@ -1063,13 +1047,13 @@ def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: 
     return "\n".join(out)
 
 
-def render_divergence(raw_text: str, answers=None, verifier: str = "", query: str = "") -> str:
+def render_divergence(raw_text: str, answers=None, verifier: str = "", query: str = "", labels=None) -> str:
     """解析 → 过滤 → 渲染。解析失败时原样返回模型输出。"""
     data = _parse_divergence(raw_text)
     if data is None:
         return _strip_code_fence(raw_text)
     data, dropped_quote, dropped_verify = filter_divergence(data, answers, verifier, query)
-    return _render_divergence_data(data, dropped_quote, dropped_verify)
+    return _render_divergence_data(data, dropped_quote, dropped_verify, labels)
 
 
 
@@ -1118,8 +1102,10 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
             try:
                 text = call_model(judge)
                 if text:
+                    _reg = get_model_registry()
+                    labels = [((_reg.get(k) or {}).get("label") or k) for k in answers.keys()]
                     verifier = DIVERGENCE_VERIFIER if DIVERGENCE_VERIFIER not in ("", judge) else ""
-                    return render_divergence(text, list(answers.values()), verifier, query), judge
+                    return render_divergence(text, list(answers.values()), verifier, query, labels), judge
                 last_error = "%s 返回空内容" % judge
             except Exception as e:
                 last_error = str(e)
