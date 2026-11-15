@@ -131,7 +131,9 @@ python scripts/show_memory.py --clear  # 全部忘掉
 | 📊 | **全链路 Trace** | 每个请求一个 Trace ID，线程池里的日志也不会丢 |
 | 🛡️ | **鉴权与限流** | API Key 校验 + SlowAPI 单 IP 限流 + 工具错误自愈重试 |
 
-内置 10 个模型可直接使用：通义千问、DeepSeek、智谱 GLM、Kimi、豆包 Seed、GPT-5.6、GPT-6、GPT-6.1、Claude Sonnet 4.6、Claude Opus 4.6。
+内置 10 个模型，注册表里已配好：通义千问、DeepSeek、智谱 GLM、Kimi、豆包 Seed、GPT-5.6、GPT-6、GPT-6.1、Claude Sonnet 4.6、Claude Opus 4.6。
+
+> `env.txt` 里所有 key 都是占位符，需要换成你自己的。Claude 那两行假设你有一个**自己可控的 OpenAI 兼容中转**——把 `base_url` 指过去即可（Anthropic 原生接口不是 OpenAI 格式，且境内直连会被拦）。某一行 404 或 503 是 key 的问题，不是代码的问题：`GET /models/health` 能列出哪些真的活着。
 
 ## 🚀 快速开始
 

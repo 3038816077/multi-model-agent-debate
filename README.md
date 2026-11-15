@@ -125,7 +125,9 @@ Both layers are merged into a single system message at request time, so the prom
 | 📊 | **End-to-end tracing** | One trace ID per request, surviving the thread pool |
 | 🛡️ | **Auth and rate limiting** | API key check + SlowAPI per-IP limits + self-healing retries on tool errors |
 
-Ten models ship with the registry: Qwen, DeepSeek, Zhipu GLM, Kimi, Doubao Seed, GPT-5.6, GPT-6, GPT-6.1, Claude Sonnet 4.6, Claude Opus 4.6.
+Ten models are pre-wired in the registry: Qwen, DeepSeek, Zhipu GLM, Kimi, Doubao Seed, GPT-5.6, GPT-6, GPT-6.1, Claude Sonnet 4.6, Claude Opus 4.6.
+
+> Every key in `env.txt` is a placeholder — bring your own. The Claude rows assume an **OpenAI-compatible proxy you control**: point `base_url` at it, since Anthropic's own API is not OpenAI-shaped and is region-restricted. If a row 404s or 503s, it is the key, not the code — `GET /models/health` tells you which rows are actually alive.
 
 ## 🚀 Quick start
 
