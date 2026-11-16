@@ -15,6 +15,7 @@ from app.core.config import (
     resolve_model_id,
 )
 from app.core.logger import logger
+from app.core.router import log_usage
 from app.tools.doc_reader import DocReadError
 
 # 显式标记优先，否则按这个顺序试；都不可用就报错
@@ -72,6 +73,13 @@ def describe_image(data: bytes, filename: str) -> dict:
             max_tokens=min(get_model_max_tokens(model, 1500), 4000),
         )
         text = (resp.choices[0].message.content or "").strip()
+        try:
+            u = getattr(resp, "usage", None)
+            log_usage(trace_id="", model=model, scene="vision",
+                      prompt_tokens=getattr(u, "prompt_tokens", 0) or 0,
+                      completion_tokens=getattr(u, "completion_tokens", 0) or 0)
+        except Exception:
+            pass
     except Exception as e:
         logger.error("图片识别失败（%s）：%s" % (model, e))
         raise DocReadError("图片识别失败：%s" % str(e)[:120])

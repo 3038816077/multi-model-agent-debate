@@ -38,7 +38,7 @@ def _model_extra(model_id: str) -> dict:
     return {"extra_body": extra} if extra else {}
 
 
-def _log_resp(resp, model_id: str, trace_id: str, started_at: float) -> dict:
+def _log_resp(resp, model_id: str, trace_id: str, started_at: float, scene: str = "chat") -> dict:
     """把一次模型调用的用量记进 usage.jsonl，并返回给调用方用于展示。
 
     失败不影响主流程，返回空字典表示没有可用的用量数据。
@@ -53,6 +53,7 @@ def _log_resp(resp, model_id: str, trace_id: str, started_at: float) -> dict:
         model=model_id,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        scene=scene,
         latency_ms=int((time.time() - started_at) * 1000),
     )
     return {
@@ -1150,7 +1151,7 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
             max_tokens=get_model_max_tokens(judge, 800),
             **_model_extra(judge),
         )
-        usage = _log_resp(resp, judge, trace_id, started)
+        usage = _log_resp(resp, judge, trace_id, started, "divergence")
         return extract_answer_text(resp), usage
 
     def sync_call():
@@ -1265,7 +1266,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                             max_tokens=get_model_max_tokens(model_name),
                             **_model_extra(model_name)
                         )
-                        _acc.update(_log_resp(resp, model_name, current_trace_id, _t0))
+                        _acc.update(_log_resp(resp, model_name, current_trace_id, _t0, "group"))
                         text = extract_answer_text(resp)
                         if not text:
                             # 思考型模型可能把输出额度全用在推理上，正文为空：
@@ -1337,8 +1338,8 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
 
 # ==================== 4. 多会话管理接口 ====================
 @router.get("/usage/stats", summary="用量与成本汇总")
-def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
-    """汇总 usage.jsonl：今天 / 最近 N 天 / 累计，以及按模型拆分。
+def usage_stats(days: int = 14, recent: int = 20, auth: bool = Depends(verify_api_key)):
+    """汇总 usage.jsonl：今天 / 最近 N 天 / 累计，按天、按模型、按场景拆分。
 
     usage.jsonl 只追加不读取，这里按行扫一遍做聚合；文件很大时只读尾部，
     并明确返回 truncated 标记，避免"看起来是全部"其实是抽样。
@@ -1346,8 +1347,12 @@ def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
     import os
 
     path = USAGE_LOG_PATH
+    empty = {
+        "today": {}, "window": {}, "total": {}, "by_model": [], "by_scene": [],
+        "daily": [], "recent": [], "rows": 0, "truncated": False, "window_days": days,
+    }
     if not os.path.exists(path):
-        return {"code": 200, "data": {"today": {}, "window": {}, "total": {}, "by_model": [], "rows": 0, "truncated": False}}
+        return {"code": 200, "data": empty}
 
     max_rows = 200_000
     rows = []
@@ -1356,9 +1361,8 @@ def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line:
-                    continue
-                rows.append(line)
+                if line:
+                    rows.append(line)
         if len(rows) > max_rows:
             rows = rows[-max_rows:]
             truncated = True
@@ -1371,10 +1375,11 @@ def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
     window_start = now - days * 86400
 
     def _empty():
-        return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "unpriced_calls": 0}
+        return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                "cost_usd": 0.0, "unpriced_calls": 0, "latency_ms": 0}
 
     today, window, total = _empty(), _empty(), _empty()
-    by_model = {}
+    by_model, by_scene, by_day, recent_rows = {}, {}, {}, []
 
     for line in rows:
         try:
@@ -1385,6 +1390,7 @@ def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
         priced = rec.get("priced", True)
         pt = rec.get("prompt_tokens") or 0
         ct = rec.get("completion_tokens") or 0
+        lat = rec.get("latency_ms") or 0
         ts = rec.get("ts")
 
         def _add(bucket):
@@ -1392,6 +1398,7 @@ def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
             bucket["prompt_tokens"] += pt
             bucket["completion_tokens"] += ct
             bucket["cost_usd"] += cost
+            bucket["latency_ms"] += lat
             if not priced:
                 bucket["unpriced_calls"] += 1
 
@@ -1401,18 +1408,54 @@ def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
                 _add(today)
             if ts >= window_start:
                 _add(window)
+                key = time.strftime("%Y-%m-%d", time.localtime(ts))
+                _add(by_day.setdefault(key, _empty()))
+                if recent > 0:
+                    recent_rows.append({
+                        "ts": ts,
+                        "date": time.strftime("%m-%d %H:%M", time.localtime(ts)),
+                        "model": rec.get("model") or "unknown",
+                        "scene": rec.get("scene") or "(未标注)",
+                        "tokens": pt + ct,
+                        "cost_usd": round(cost, 8),
+                        "latency_ms": lat,
+                        "priced": priced,
+                    })
 
-        model = rec.get("model") or "unknown"
-        entry = by_model.setdefault(model, {"model": model, **_empty()})
-        _add(entry)
+        _add(by_model.setdefault(rec.get("model") or "unknown",
+                                 {"model": rec.get("model") or "unknown", **_empty()}))
+        _add(by_scene.setdefault(rec.get("scene") or "(未标注)",
+                                 {"scene": rec.get("scene") or "(未标注)", **_empty()}))
 
     for bucket in (today, window, total):
         bucket["cost_usd"] = round(bucket["cost_usd"], 6)
+    for bucket in list(by_model.values()) + list(by_scene.values()) + list(by_day.values()):
+        bucket["cost_usd"] = round(bucket["cost_usd"], 6)
+
+    for bucket in (today, window, total):
+        if bucket["calls"]:
+            bucket["latency_avg"] = int(bucket["latency_ms"] / bucket["calls"])
+            bucket["tokens"] = bucket["prompt_tokens"] + bucket["completion_tokens"]
 
     models = sorted(by_model.values(), key=lambda m: m["calls"], reverse=True)
-    for m in models:
-        m["cost_usd"] = round(m["cost_usd"], 6)
+    scenes = sorted(by_scene.values(), key=lambda m: m["calls"], reverse=True)
+    for m in models + scenes:
+        if m["calls"]:
+            m["latency_avg"] = int(m["latency_ms"] / m["calls"])
+            m["tokens"] = m["prompt_tokens"] + m["completion_tokens"]
 
+    # 补齐没有调用的日子，前端画柱状图不会断档
+    daily = []
+    for offset in range(days - 1, -1, -1):
+        key = time.strftime("%Y-%m-%d", time.localtime(now - offset * 86400))
+        bucket = by_day.get(key) or {"calls": 0, "cost_usd": 0.0, "tokens": 0,
+                                     "prompt_tokens": 0, "completion_tokens": 0,
+                                     "unpriced_calls": 0, "latency_ms": 0}
+        bucket = dict(bucket)
+        bucket.setdefault("tokens", bucket.get("prompt_tokens", 0) + bucket.get("completion_tokens", 0))
+        daily.append({"date": key, **bucket})
+
+    recent_rows.sort(key=lambda r: r["ts"], reverse=True)
     return {
         "code": 200,
         "data": {
@@ -1421,11 +1464,13 @@ def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
             "window_days": days,
             "total": total,
             "by_model": models[:12],
+            "by_scene": scenes[:8],
+            "daily": daily,
+            "recent": recent_rows[:recent],
             "rows": len(rows),
             "truncated": truncated,
         },
     }
-
 
 @router.get("/sessions", summary="获取所有会话列表")
 def get_sessions(db: Session = Depends(get_db)):

@@ -51,3 +51,8 @@ def startup_event():
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+@app.get("/dashboard", include_in_schema=False)
+def dashboard():
+    """用量仪表盘：token / 成本 / 延迟的独立页面。"""
+    return FileResponse(os.path.join(STATIC_DIR, "dashboard.html"))

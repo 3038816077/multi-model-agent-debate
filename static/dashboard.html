@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用量仪表盘</title>
+<style>
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; padding: 24px 28px 60px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f6f7fb; color: #111827;
+    }
+    .top { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+    .top h1 { font-size: 20px; margin: 0; font-weight: 600; }
+    .top .sub { color: #6b7280; font-size: 13px; }
+    .spacer { flex: 1; }
+    .range button, .btn {
+        border: 1px solid #e5e7eb; background: #fff; color: #374151;
+        padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer;
+    }
+    .range button.active { background: #eef2ff; border-color: #c7d2fe; color: #4338ca; font-weight: 600; }
+    .btn:hover, .range button:hover { border-color: #c7d2fe; }
+    a.back { color: #4338ca; text-decoration: none; font-size: 13px; }
+    a.back:hover { text-decoration: underline; }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px 18px; }
+    .card .label { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+    .card .value { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.5px; }
+    .card .hint { font-size: 12px; color: #9ca3af; margin-top: 6px; }
+
+    .panel { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+    .panel h2 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+    .panel .desc { font-size: 12px; color: #9ca3af; margin-bottom: 16px; }
+
+    .chart { display: flex; align-items: flex-end; gap: 6px; height: 160px; padding-top: 8px; }
+    .bar-wrap { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+    .bar { width: 100%; max-width: 46px; background: linear-gradient(180deg, #818cf8, #6366f1); border-radius: 4px 4px 0 0; min-height: 2px; transition: opacity .15s; }
+    .bar:hover { opacity: .8; }
+    .bar.zero { background: #eef2ff; }
+    .bar-label { font-size: 10px; color: #9ca3af; margin-top: 6px; white-space: nowrap; }
+
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; color: #6b7280; font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid #f1f2f6; }
+    td { padding: 8px; border-bottom: 1px solid #f6f7fb; font-variant-numeric: tabular-nums; }
+    tr:last-child td { border-bottom: none; }
+    .num { text-align: right; }
+    .muted { color: #9ca3af; }
+    .warn { color: #b45309; }
+    .model-bar { height: 6px; background: #eef2ff; border-radius: 3px; overflow: hidden; min-width: 60px; }
+    .model-bar > div { height: 100%; background: #6366f1; }
+    .empty { color: #9ca3af; font-size: 13px; padding: 10px 0; }
+</style>
+</head>
+<body>
+    <div class="top">
+        <h1>📊 用量仪表盘</h1>
+        <span class="sub" id="meta">加载中…</span>
+        <span class="spacer"></span>
+        <span class="range" id="range">
+            <button data-days="7">7 天</button>
+            <button data-days="14" class="active">14 天</button>
+            <button data-days="30">30 天</button>
+        </span>
+        <button class="btn" onclick="load()">刷新</button>
+        <a class="back" href="/">← 返回对话</a>
+    </div>
+
+    <div class="cards" id="cards"></div>
+
+    <div class="panel">
+        <h2>每日消耗</h2>
+        <div class="desc" id="chartDesc">按 token 总量排序，鼠标悬停看明细</div>
+        <div class="chart" id="chart"></div>
+    </div>
+
+    <div class="grid2">
+        <div class="panel">
+            <h2>按模型</h2>
+            <div class="desc">累计调用量与成本，条长为调用次数</div>
+            <div id="models"></div>
+        </div>
+        <div class="panel">
+            <h2>按场景</h2>
+            <div class="desc">钱花在哪一步：普通对话 / 并行作答 / 分歧分析 / 图片识别</div>
+            <div id="scenes"></div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>最近调用</h2>
+        <div class="desc">最新 20 条，按发生时间倒序</div>
+        <div id="recent"></div>
+    </div>
+
+<script>
+    const API_KEY = localStorage.getItem("api_key") || "my-secret-key-123";
+    let days = 14;
+    let labels = {};
+
+    const SCENE_NAMES = {
+        chat: "普通对话",
+        group: "并行作答",
+        divergence: "分歧分析",
+        vision: "图片识别",
+        "(未标注)": "早期调用（未标注）"
+    };
+
+    function fmtTokens(n) {
+        n = Number(n) || 0;
+        return n.toLocaleString("en-US");
+    }
+
+    function fmtCost(cost) {
+        const c = Number(cost) || 0;
+        if (!c) return "$0";
+        if (c < 0.001) return "$" + c.toFixed(5);
+        if (c < 0.1) return "$" + c.toFixed(4);
+        return "$" + c.toFixed(3);
+    }
+
+    function fmtLatency(ms) {
+        const v = Number(ms) || 0;
+        if (!v) return "—";
+        return v >= 1000 ? (v / 1000).toFixed(1) + "s" : v + "ms";
+    }
+
+    function modelName(id) {
+        return labels[id] || id;
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    async function loadLabels() {
+        try {
+            const r = await fetch("/models", { headers: { "X-API-Key": API_KEY } });
+            const j = await r.json();
+            const list = Array.isArray(j) ? j : (j.data || []);
+            list.forEach(m => {
+                const key = m.model_id || m.key || m.name || m.model;
+                if (key) labels[key] = m.label || key;
+            });
+        } catch (e) { /* 名称映射失败不影响主流程 */ }
+    }
+
+    function renderCards(d) {
+        const today = d.today || {};
+        const total = d.total || {};
+        const cards = [
+            { label: "今日成本", value: fmtCost(today.cost_usd), hint: "累计 " + fmtCost(total.cost_usd) },
+            { label: "今日 tokens", value: fmtTokens(today.tokens), hint: "累计 " + fmtTokens(total.tokens) },
+            { label: "今日调用", value: (today.calls || 0), hint: "累计 " + (total.calls || 0) + " 次" },
+            { label: "今日平均延迟", value: fmtLatency(today.latency_avg), hint: ((today.unpriced_calls || 0) ? today.unpriced_calls + " 次未配价格" : "全部已计价") },
+        ];
+        document.getElementById("cards").innerHTML = cards.map(c =>
+            '<div class="card"><div class="label">' + escapeHtml(c.label) + '</div>' +
+            '<div class="value">' + escapeHtml(c.value) + '</div>' +
+            '<div class="hint">' + escapeHtml(c.hint) + '</div></div>').join("");
+    }
+
+    function renderChart(rows) {
+        const max = Math.max.apply(null, rows.map(r => r.tokens || 0).concat([1]));
+        const html = rows.map(r => {
+            const h = Math.round((r.tokens || 0) / max * 100);
+            const title = r.date + "：" + fmtTokens(r.tokens) + " tokens · " + (r.calls || 0) + " 次 · " + fmtCost(r.cost_usd);
+            return '<div class="bar-wrap">' +
+                '<div class="bar' + (h ? "" : " zero") + '" style="height:' + Math.max(h, 2) + '%" title="' + escapeHtml(title) + '"></div>' +
+                '<div class="bar-label">' + escapeHtml(r.date.slice(5)) + '</div></div>';
+        }).join("");
+        document.getElementById("chart").innerHTML = html || '<div class="empty">还没有数据</div>';
+    }
+
+    function renderModels(list) {
+        if (!list.length) return '<div class="empty">还没有调用记录</div>';
+        const max = Math.max.apply(null, list.map(m => m.calls || 0).concat([1]));
+        return '<table><tr><th>模型</th><th class="num">调用</th><th class="num">tokens</th><th class="num">成本</th><th style="width:90px"></th></tr>' +
+            list.map(m => {
+                const unpriced = (m.unpriced_calls || 0) > 0;
+                return '<tr><td>' + escapeHtml(modelName(m.model)) +
+                    (unpriced ? ' <span class="warn" title="这些调用没配单价，成本被低估">⚠</span>' : '') + '</td>' +
+                    '<td class="num">' + (m.calls || 0) + '</td>' +
+                    '<td class="num">' + fmtTokens(m.tokens) + '</td>' +
+                    '<td class="num">' + fmtCost(m.cost_usd) + '</td>' +
+                    '<td><div class="model-bar"><div style="width:' + Math.round((m.calls || 0) / max * 100) + '%"></div></div></td></tr>';
+            }).join("") + '</table>';
+    }
+
+    function renderScenes(list) {
+        if (!list.length) return '<div class="empty">还没有调用记录</div>';
+        const totalCalls = list.reduce((s, x) => s + (x.calls || 0), 0) || 1;
+        return '<table><tr><th>场景</th><th class="num">调用</th><th class="num">tokens</th><th class="num">成本</th><th class="num">占比</th></tr>' +
+            list.map(s => {
+                const pct = Math.round((s.calls || 0) / totalCalls * 100);
+                return '<tr><td>' + escapeHtml(SCENE_NAMES[s.scene] || s.scene) + '</td>' +
+                    '<td class="num">' + (s.calls || 0) + '</td>' +
+                    '<td class="num">' + fmtTokens(s.tokens) + '</td>' +
+                    '<td class="num">' + fmtCost(s.cost_usd) + '</td>' +
+                    '<td class="num muted">' + pct + '%</td></tr>';
+            }).join("") + '</table>';
+    }
+
+    function renderRecent(list) {
+        if (!list.length) return '<div class="empty">还没有调用记录</div>';
+        return '<table><tr><th>时间</th><th>模型</th><th>场景</th><th class="num">tokens</th><th class="num">成本</th><th class="num">延迟</th></tr>' +
+            list.map(r =>
+                '<tr><td class="muted">' + escapeHtml(r.date) + '</td>' +
+                '<td>' + escapeHtml(modelName(r.model)) + '</td>' +
+                '<td class="muted">' + escapeHtml(SCENE_NAMES[r.scene] || r.scene) + '</td>' +
+                '<td class="num">' + fmtTokens(r.tokens) + '</td>' +
+                '<td class="num">' + (r.priced === false ? '<span class="warn">未配置价格</span>' : fmtCost(r.cost_usd)) + '</td>' +
+                '<td class="num muted">' + fmtLatency(r.latency_ms) + '</td></tr>').join("") + '</table>';
+    }
+
+    async function load() {
+        document.getElementById("meta").textContent = "加载中…";
+        try {
+            const r = await fetch("/usage/stats?days=" + days + "&recent=20", { headers: { "X-API-Key": API_KEY } });
+            const payload = await r.json();
+            if (!payload || payload.code !== 200) throw new Error((payload && payload.message) || "接口返回异常");
+            const d = payload.data || {};
+            renderCards(d);
+            renderChart(d.daily || []);
+            document.getElementById("models").innerHTML = renderModels(d.by_model || []);
+            document.getElementById("scenes").innerHTML = renderScenes(d.by_scene || []);
+            document.getElementById("recent").innerHTML = renderRecent(d.recent || []);
+
+            let meta = "统计 " + (d.rows || 0) + " 条调用记录";
+            if (d.truncated) meta += "（日志过大，只统计了最近部分）";
+            const unpriced = ((d.total || {}).unpriced_calls) || 0;
+            if (unpriced) meta += " · " + unpriced + " 次调用未配置单价，成本被低估";
+            document.getElementById("meta").textContent = meta;
+        } catch (e) {
+            document.getElementById("meta").textContent = "加载失败：" + (e.message || "网络异常");
+        }
+    }
+
+    document.getElementById("range").addEventListener("click", (ev) => {
+        const btn = ev.target.closest("button[data-days]");
+        if (!btn) return;
+        days = Number(btn.dataset.days);
+        document.querySelectorAll("#range button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        load();
+    });
+
+    (async function init() {
+        await loadLabels();
+        await load();
+    })();
+</script>
+</body>
+</html>

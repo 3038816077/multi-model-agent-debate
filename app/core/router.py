@@ -185,7 +185,8 @@ def has_price(model: str) -> bool:
 
 
 def log_usage(trace_id: str, model: str, prompt_tokens: int, completion_tokens: int,
-              latency_ms: Optional[int] = None, tier: Optional[str] = None) -> None:
+              latency_ms: Optional[int] = None, tier: Optional[str] = None,
+              scene: str = "chat") -> None:
     """把每次模型调用追加到 JSONL，用于事后算成本 / 做对照实验。
 
     只追加、不读取、失败不影响主流程。
@@ -196,6 +197,7 @@ def log_usage(trace_id: str, model: str, prompt_tokens: int, completion_tokens: 
             "trace_id": trace_id,
             "model": model,
             "tier": tier or get_current_tier(),
+            "scene": scene,
             "prompt_tokens": int(prompt_tokens or 0),
             "completion_tokens": int(completion_tokens or 0),
             "latency_ms": latency_ms,
