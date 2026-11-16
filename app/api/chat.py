@@ -10,10 +10,10 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import DIVERGENCE_MODEL, DIVERGENCE_VERIFIER, get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
+from app.core.config import USAGE_LOG_PATH, DIVERGENCE_MODEL, DIVERGENCE_VERIFIER, get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import (classify, pick_model, set_current_tier, log_usage,
-                             estimate_cost, TIER_CHEAP, TIER_MID, TIER_STRONG)
+                             estimate_cost, has_price, TIER_CHEAP, TIER_MID, TIER_STRONG)
 from app.core.logger import logger, set_trace
 from app.core.utils import extract_answer_text, clean_latex_text, clean_weather_reply, generate_dialog_summary, extract_long_term_memory, extract_user_memory
 from app.tools.calc import get_current_time, calculate_expression
@@ -38,18 +38,29 @@ def _model_extra(model_id: str) -> dict:
     return {"extra_body": extra} if extra else {}
 
 
-def _log_resp(resp, model_id: str, trace_id: str, started_at: float) -> None:
-    """把一次模型调用的用量记进 usage.jsonl；失败不影响主流程。"""
+def _log_resp(resp, model_id: str, trace_id: str, started_at: float) -> dict:
+    """把一次模型调用的用量记进 usage.jsonl，并返回给调用方用于展示。
+
+    失败不影响主流程，返回空字典表示没有可用的用量数据。
+    """
     usage = getattr(resp, "usage", None)
     if usage is None:
-        return
+        return {}
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
     log_usage(
         trace_id=trace_id,
         model=model_id,
-        prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-        completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
         latency_ms=int((time.time() - started_at) * 1000),
     )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cost_usd": round(estimate_cost(model_id, prompt_tokens, completion_tokens), 8),
+        "priced": has_price(model_id),
+    }
 
 
 
@@ -1107,13 +1118,13 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
                              fallback_model: str = "") -> tuple:
     """比对多份独立回答，挑出共识、分歧和孤例。
 
-    返回 (渲染后的 markdown, 实际使用的模型 key)。
+    返回 (渲染后的 markdown, 实际使用的模型 key, 用量字典)。
 
     优先用调用方指定的主模型：分歧分析是并行模式的主要产出，用最便宜的档位来做是错配。
     主模型失败时才退回便宜档。
     """
     if not answers:
-        return "", ""
+        return "", "", {}
     candidates = []
     cheap = pick_model(TIER_CHEAP)
     order = (fallback_model, cheap) if DIVERGENCE_MODEL == "chief" else (cheap, fallback_model)
@@ -1121,9 +1132,9 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
         if name and name not in candidates:
             candidates.append(name)
     if not candidates:
-        return "（当前注册表里没有可用模型，跳过分歧分析）", ""
+        return "（当前注册表里没有可用模型，跳过分歧分析）", "", {}
 
-    def call_model(judge: str) -> str:
+    def call_model(judge: str) -> tuple:
         client = get_client_for_model(judge)
         body = "\n\n".join(
             "【回答%d】\n%s" % (i + 1, (ans or "")[:DIVERGENCE_ANSWER_MAX_CHARS])
@@ -1139,24 +1150,24 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
             max_tokens=get_model_max_tokens(judge, 800),
             **_model_extra(judge),
         )
-        _log_resp(resp, judge, trace_id, started)
-        return extract_answer_text(resp)
+        usage = _log_resp(resp, judge, trace_id, started)
+        return extract_answer_text(resp), usage
 
     def sync_call():
         last_error = None
         for judge in candidates:
             try:
-                text = call_model(judge)
+                text, usage = call_model(judge)
                 if text:
                     _reg = get_model_registry()
                     labels = [((_reg.get(k) or {}).get("label") or k) for k in answers.keys()]
                     verifier = DIVERGENCE_VERIFIER if DIVERGENCE_VERIFIER not in ("", judge) else ""
-                    return render_divergence(text, list(answers.values()), verifier, query, labels), judge
+                    return render_divergence(text, list(answers.values()), verifier, query, labels), judge, usage
                 last_error = "%s 返回空内容" % judge
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"【并行模式】分歧分析在 {judge} 上失败，尝试下一个：{e}")
-        return "分歧分析失败：" + friendly_llm_error(Exception(last_error or ""), candidates[0]), candidates[0]
+        return "分歧分析失败：" + friendly_llm_error(Exception(last_error or ""), candidates[0]), candidates[0], {}
 
     return await asyncio.to_thread(sync_call)
 
@@ -1242,6 +1253,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             yield f"data: {json.dumps({'event': 'init_models', 'models': request_body.staff_models}, ensure_ascii=False)}\n\n"
 
             async def run_first_round(model_name):
+                _acc = {}
                 def sync_call():
                     try:
                         client = get_client_for_model(model_name)
@@ -1253,25 +1265,38 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                             max_tokens=get_model_max_tokens(model_name),
                             **_model_extra(model_name)
                         )
-                        _log_resp(resp, model_name, current_trace_id, _t0)
+                        _acc.update(_log_resp(resp, model_name, current_trace_id, _t0))
                         text = extract_answer_text(resp)
                         if not text:
                             # 思考型模型可能把输出额度全用在推理上，正文为空：
                             # 当作失败处理，否则前端会渲染一个空气泡
-                            return model_name, f"⚠️ {model_name} 返回了空内容（可能把输出额度全用在思考上，可调大它的 max_tokens）", False
-                        return model_name, text, True
+                            return model_name, f"⚠️ {model_name} 返回了空内容（可能把输出额度全用在思考上，可调大它的 max_tokens）", False, _acc
+                        return model_name, text, True, _acc
                     except Exception as e:
-                        return model_name, friendly_llm_error(e, model_name), False
+                        return model_name, friendly_llm_error(e, model_name), False, {}
                 return await asyncio.to_thread(sync_call)
+
+            run_usage = {"calls": 0, "tokens": 0, "cost_usd": 0.0, "unpriced": []}
+
+            def _acc_usage(usage):
+                if not usage:
+                    return
+                run_usage["calls"] += 1
+                run_usage["tokens"] += usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+                run_usage["cost_usd"] += usage.get("cost_usd", 0) or 0
+                if not usage.get("priced", True):
+                    run_usage["unpriced"].append(usage.get("model", ""))
 
             tasks_1 = [run_first_round(m) for m in request_body.staff_models]
             for future in asyncio.as_completed(tasks_1):
-                m_name, content, ok = await future
+                m_name, content, ok, _usage = await future
+                _usage["model"] = m_name
+                _acc_usage(_usage)
                 state["first_round"][m_name] = content
                 if not ok:
                     # 失败的回答只用于前端展示，不参与后续分歧分析（否则错误文案会被当成“观点”喂给别的模型）
                     state["failed_models"].append(m_name)
-                yield f"data: {json.dumps({'event': 'speak', 'stage': 1, 'model': m_name, 'content': content}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'event': 'speak', 'stage': 1, 'model': m_name, 'content': content, 'usage': _usage}, ensure_ascii=False)}\n\n"
 
             # 只有成功的回答才进入后续阶段
             valid_answers = {
@@ -1287,9 +1312,11 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             # 反而低 0.87 分（研讨 − 并行 = −0.87，95% CI [-1.29, -0.44]），成本还翻倍。
             # 多模型的价值全部来自"多个模型独立作答"，所以到这里直接分析共识与分歧。
             yield f"data: {json.dumps({'event': 'stage', 'data': '分歧分析'}, ensure_ascii=False)}\n\n"
-            divergence, divergence_model = await analyze_divergence(
+            divergence, divergence_model, _div_usage = await analyze_divergence(
                 state["query"], valid_answers, current_trace_id, request_body.chief_model
             )
+            _div_usage["model"] = divergence_model
+            _acc_usage(_div_usage)
             yield f"data: {json.dumps({'event': 'divergence', 'content': divergence, 'model': divergence_model}, ensure_ascii=False)}\n\n"
 
             for m, ans in state["first_round"].items():
@@ -1298,7 +1325,7 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
                          f"GROUP_DIVERGENCE:{request_body.chief_model}")
             _schedule_group_memory(session_id, request_body.message, valid_answers)
 
-            yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id})}\n\n"
+            yield f"data: {json.dumps({'event': 'done', 'session_id': session_id, 'trace_id': current_trace_id, 'usage': run_usage})}\n\n"
 
 
         except Exception as e:
@@ -1309,6 +1336,97 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
 
 
 # ==================== 4. 多会话管理接口 ====================
+@router.get("/usage/stats", summary="用量与成本汇总")
+def usage_stats(days: int = 7, auth: bool = Depends(verify_api_key)):
+    """汇总 usage.jsonl：今天 / 最近 N 天 / 累计，以及按模型拆分。
+
+    usage.jsonl 只追加不读取，这里按行扫一遍做聚合；文件很大时只读尾部，
+    并明确返回 truncated 标记，避免"看起来是全部"其实是抽样。
+    """
+    import os
+
+    path = USAGE_LOG_PATH
+    if not os.path.exists(path):
+        return {"code": 200, "data": {"today": {}, "window": {}, "total": {}, "by_model": [], "rows": 0, "truncated": False}}
+
+    max_rows = 200_000
+    rows = []
+    truncated = False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rows.append(line)
+        if len(rows) > max_rows:
+            rows = rows[-max_rows:]
+            truncated = True
+    except Exception as e:
+        logger.warning(f"[用量统计] 读取失败：{e}")
+        return {"code": 500, "message": f"读取用量日志失败：{e}"}
+
+    now = time.time()
+    day_start = time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
+    window_start = now - days * 86400
+
+    def _empty():
+        return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "unpriced_calls": 0}
+
+    today, window, total = _empty(), _empty(), _empty()
+    by_model = {}
+
+    for line in rows:
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        cost = rec.get("cost_usd") or 0.0
+        priced = rec.get("priced", True)
+        pt = rec.get("prompt_tokens") or 0
+        ct = rec.get("completion_tokens") or 0
+        ts = rec.get("ts")
+
+        def _add(bucket):
+            bucket["calls"] += 1
+            bucket["prompt_tokens"] += pt
+            bucket["completion_tokens"] += ct
+            bucket["cost_usd"] += cost
+            if not priced:
+                bucket["unpriced_calls"] += 1
+
+        _add(total)
+        if isinstance(ts, (int, float)):
+            if ts >= day_start:
+                _add(today)
+            if ts >= window_start:
+                _add(window)
+
+        model = rec.get("model") or "unknown"
+        entry = by_model.setdefault(model, {"model": model, **_empty()})
+        _add(entry)
+
+    for bucket in (today, window, total):
+        bucket["cost_usd"] = round(bucket["cost_usd"], 6)
+
+    models = sorted(by_model.values(), key=lambda m: m["calls"], reverse=True)
+    for m in models:
+        m["cost_usd"] = round(m["cost_usd"], 6)
+
+    return {
+        "code": 200,
+        "data": {
+            "today": today,
+            "window": window,
+            "window_days": days,
+            "total": total,
+            "by_model": models[:12],
+            "rows": len(rows),
+            "truncated": truncated,
+        },
+    }
+
+
 @router.get("/sessions", summary="获取所有会话列表")
 def get_sessions(db: Session = Depends(get_db)):
     from app.db.models import DBSession, DBMessage

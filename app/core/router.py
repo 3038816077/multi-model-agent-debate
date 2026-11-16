@@ -19,6 +19,7 @@
 
 import contextvars
 import json
+import time
 import os
 import re
 from typing import Optional
@@ -169,6 +170,20 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
     return (prompt_tokens * price_in + completion_tokens * price_out) / 1_000_000
 
 
+def has_price(model: str) -> bool:
+    """价格表里有没有这个模型的单价。
+
+    返回 False 时调用方必须明确告诉用户"这部分没算钱"，
+    否则总成本会静默偏低——数字看起来没问题，实际是假的。
+    """
+    real = model
+    try:
+        real = resolve_model_id(model) or model
+    except Exception:
+        pass
+    return bool(MODEL_PRICE_PER_M.get(real) or MODEL_PRICE_PER_M.get(model))
+
+
 def log_usage(trace_id: str, model: str, prompt_tokens: int, completion_tokens: int,
               latency_ms: Optional[int] = None, tier: Optional[str] = None) -> None:
     """把每次模型调用追加到 JSONL，用于事后算成本 / 做对照实验。
@@ -177,6 +192,7 @@ def log_usage(trace_id: str, model: str, prompt_tokens: int, completion_tokens: 
     """
     try:
         record = {
+            "ts": round(time.time(), 3),
             "trace_id": trace_id,
             "model": model,
             "tier": tier or get_current_tier(),
@@ -184,6 +200,7 @@ def log_usage(trace_id: str, model: str, prompt_tokens: int, completion_tokens: 
             "completion_tokens": int(completion_tokens or 0),
             "latency_ms": latency_ms,
             "cost_usd": round(estimate_cost(model, prompt_tokens or 0, completion_tokens or 0), 8),
+            "priced": has_price(model),
         }
         directory = os.path.dirname(USAGE_LOG_PATH)
         if directory:
