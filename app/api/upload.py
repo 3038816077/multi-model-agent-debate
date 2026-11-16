@@ -15,7 +15,8 @@ from pydantic import BaseModel
 
 from app.core.logger import logger
 from app.middleware.auth import limiter, verify_api_key
-from app.tools.doc_reader import DocReadError, SUPPORTED_EXTS, extract_text_from_bytes
+from app.tools.doc_reader import DocReadError, IMAGE_EXTS, SUPPORTED_EXTS, extract_text_from_bytes
+from app.tools.vision import describe_image
 
 router = APIRouter()
 
@@ -52,7 +53,7 @@ def load_document(doc_id: str):
         return None
 
 
-@router.post("/upload", summary="上传 Word / PDF 并解析为纯文本")
+@router.post("/upload", summary="上传文档或图片并解析为纯文本")
 @limiter.limit("20/minute")
 async def upload_document(request: Request, body: UploadRequest, auth: bool = Depends(verify_api_key)):
     filename = os.path.basename((body.filename or "").strip()) or "未命名文件"
@@ -75,7 +76,10 @@ async def upload_document(request: Request, body: UploadRequest, auth: bool = De
         return {"code": 413, "message": f"文件太大了（{len(data) / 1024 / 1024:.1f}MB），上限 15MB"}
 
     try:
-        parsed = await __import__("asyncio").to_thread(extract_text_from_bytes, data, filename)
+        if ext in IMAGE_EXTS:
+            parsed = await __import__("asyncio").to_thread(describe_image, data, filename)
+        else:
+            parsed = await __import__("asyncio").to_thread(extract_text_from_bytes, data, filename)
     except DocReadError as e:
         return {"code": 422, "message": str(e)}
     except Exception as e:
@@ -89,6 +93,7 @@ async def upload_document(request: Request, body: UploadRequest, auth: bool = De
         "kind": parsed["kind"],
         "chars": parsed["chars"],
         "warning": parsed["warning"],
+        "via": parsed.get("model", ""),
         "text": parsed["text"],
         "size": len(data),
     }

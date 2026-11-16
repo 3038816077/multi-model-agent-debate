@@ -118,7 +118,7 @@ Both layers are merged into a single system message at request time, so the prom
 | 🗣️ | **Multi-model parallel** | 2–3 models from different vendors answer independently, then a cheap model reports **consensus / conflicts / one-offs** |
 | 📊 | **Measured, not asserted** | 60-question, 3-mode, fixed-judge benchmark with 95% CIs in [`eval/REPORT.md`](eval/REPORT.md) — including the result that the chief-summary round **lost** 0.87 points |
 | 🧭 | **Tiered model routing** | Picks a tier from task complexity: translation and summaries go to free models, code and design go to strong ones. Off by default, behind an `auto_route` flag. **Measured on 16 tasks: 13.6% cheaper, 3.8% quality drop** |
-| 📄 | **Document Q&A** | Upload `.docx` / `.pdf` / `.txt` from the UI; Word is parsed with the standard library (no extra dependency), PDF is extracted page by page with page numbers. **Works in both single-model and debate mode** |
+| 📄 | **Document & image Q&A** | Upload `.docx` / `.pptx` / `.xlsx` / `.pdf` / `.txt` / images from the UI. Office formats are parsed with zip + XML (no extra dependencies); images go through a vision model first, so every model in the lineup gets the same text material. |
 | 🔍 | **Three-stage RAG** | Query rewrite → BM25 + FAISS dual recall → Cross-Encoder rerank, aimed at proper nouns that plain vector search misses |
 | ⚡ | **Parallel tool calls** | Ask "weather in Beijing, Shanghai and Xiamen" and three endpoints are hit concurrently via `ThreadPoolExecutor` |
 | 🧠 | **Intent routing up front** | Deterministic cases (time, arithmetic) are handled by the backend instead of hoping the model decides to call a tool |

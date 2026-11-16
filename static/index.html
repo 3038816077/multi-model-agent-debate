@@ -454,8 +454,8 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     <label class="web-search-switch" id="webSearchLabel">
                         <input type="checkbox" id="webSearchToggle" onchange="toggleWebSearch()"> 🌐 联网搜索
                     </label>
-                    <button type="button" class="attach-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="上传 Word / PDF，然后针对文档提问">📎 文档</button>
-                    <input type="file" id="fileInput" accept=".pdf,.docx,.txt,.md,.csv" style="display:none" onchange="handleFileSelect(this)">
+                    <button type="button" class="attach-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="上传文档或图片（PDF / Word / PPT / Excel / 图片），然后针对它提问">📎 文档/图片</button>
+                    <input type="file" id="fileInput" accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp" style="display:none" onchange="handleFileSelect(this)">
                 </div>
                 <div class="attach-chip" id="attachChip" style="display:none;"></div>
                 <div class="chat-input-area">

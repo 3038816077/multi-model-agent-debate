@@ -10,6 +10,7 @@
 """
 import io
 import os
+import re
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -17,7 +18,11 @@ from xml.etree import ElementTree as ET
 MAX_CHARS = 200_000
 
 # 前端 accept 与后端白名单保持一致
-SUPPORTED_EXTS = {".pdf", ".docx", ".txt", ".md", ".markdown", ".csv", ".log", ".json"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+SUPPORTED_EXTS = {
+    ".pdf", ".docx", ".pptx", ".xlsx",
+    ".txt", ".md", ".markdown", ".csv", ".log", ".json",
+} | IMAGE_EXTS
 
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -99,6 +104,92 @@ def _pdf_text(fp) -> str:
         raise DocReadError(f"PDF 解析失败：{e}")
 
 
+# ==================== PPT / Excel ====================
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_X = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+
+
+def _slide_no(name: str) -> int:
+    m = re.findall(r"(\d+)\.xml$", name)
+    return int(m[0]) if m else 0
+
+
+def _pptx_text(fp) -> str:
+    """PPTX 本质也是 zip + XML：按页号顺序取每页的文字。"""
+    try:
+        with zipfile.ZipFile(fp) as z:
+            names = [n for n in z.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)]
+            if not names:
+                raise DocReadError("这不是有效的 .pptx（老的 .ppt 请先另存为 .pptx 再上传）")
+            names.sort(key=_slide_no)
+            pages = []
+            for i, name in enumerate(names, 1):
+                try:
+                    root = ET.fromstring(z.read(name))
+                except ET.ParseError:
+                    continue
+                lines = []
+                for para in root.iter(_A + "p"):
+                    text = "".join((t.text or "") for t in para.iter(_A + "t")).strip()
+                    if text:
+                        lines.append(text)
+                if lines:
+                    pages.append(f"--- 第 {i} 页 ---\n" + "\n".join(lines))
+            return "\n\n".join(pages)
+    except zipfile.BadZipFile:
+        raise DocReadError("文件已损坏或不是有效的 .pptx（老的 .ppt 请先另存为 .pptx）")
+
+
+def _xlsx_text(fp) -> str:
+    """XLSX 同样是 zip：共享字符串表 + 每张工作表的单元格。"""
+    try:
+        with zipfile.ZipFile(fp) as z:
+            names = z.namelist()
+            if "xl/workbook.xml" not in names:
+                raise DocReadError("这不是有效的 .xlsx（老的 .xls 请先另存为 .xlsx）")
+
+            shared = []
+            if "xl/sharedStrings.xml" in names:
+                try:
+                    root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+                    for si in root.iter(_X + "si"):
+                        shared.append("".join((t.text or "") for t in si.iter(_X + "t")))
+                except ET.ParseError:
+                    pass
+
+            sheets = [n for n in names if re.match(r"xl/worksheets/sheet\d+\.xml$", n)]
+            sheets.sort(key=_slide_no)
+            blocks = []
+            for idx, name in enumerate(sheets, 1):
+                try:
+                    root = ET.fromstring(z.read(name))
+                except ET.ParseError:
+                    continue
+                rows = []
+                for row in root.iter(_X + "row"):
+                    cells = []
+                    for c in row.findall(_X + "c"):
+                        ctype = c.get("t")
+                        if ctype == "inlineStr":
+                            value = "".join((t.text or "") for t in c.iter(_X + "t"))
+                        else:
+                            v = c.find(_X + "v")
+                            value = v.text if v is not None and v.text else ""
+                            if ctype == "s" and value.isdigit() and int(value) < len(shared):
+                                value = shared[int(value)]
+                        cells.append(value.strip())
+                    while cells and not cells[-1]:
+                        cells.pop()
+                    if any(cells):
+                        rows.append(" | ".join(cells))
+                if rows:
+                    blocks.append(f"--- 工作表 {idx} ---\n" + "\n".join(rows))
+            return "\n\n".join(blocks)
+    except zipfile.BadZipFile:
+        raise DocReadError("文件已损坏或不是有效的 .xlsx（老的 .xls 请先另存为 .xlsx）")
+
+
+
 # ==================== 纯文本 ====================
 def _plain_text(fp) -> str:
     data = fp.read() if hasattr(fp, "read") else fp
@@ -120,13 +211,17 @@ def _extract(fp, filename: str, size_hint: int = 0) -> dict:
 
     if ext == ".docx":
         text, kind = _docx_text(fp), "Word"
+    elif ext == ".pptx":
+        text, kind = _pptx_text(fp), "PPT"
+    elif ext == ".xlsx":
+        text, kind = _xlsx_text(fp), "Excel"
     elif ext == ".pdf":
         text, kind = _pdf_text(fp), "PDF"
+    elif ext in IMAGE_EXTS:
+        raise DocReadError("图片需要走视觉识别通道")
     else:
         text, kind = _plain_text(fp), "文本"
-
     # 压掉三个以上的连续空行，读起来更紧凑，也省 token
-    import re
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
     warning = ""
