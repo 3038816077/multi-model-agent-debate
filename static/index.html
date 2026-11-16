@@ -478,7 +478,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     </label>
                     <button type="button" class="attach-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="上传文档或图片（PDF / Word / PPT / Excel / 图片），然后针对它提问">📎 文档/图片</button>
                     <input type="file" id="fileInput" accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp" style="display:none" onchange="handleFileSelect(this)">
-                    <button type="button" class="attach-btn" onclick="openUsagePanel()" title="查看累计用量与成本">📊 用量</button>
+                    <a class="attach-btn" href="/dashboard" target="_blank" rel="noopener" title="打开用量与成本仪表盘" style="text-decoration:none;">📊 用量</a>
                 </div>
                 <div class="attach-chip" id="attachChip" style="display:none;"></div>
                 <div class="chat-input-area">
@@ -522,16 +522,6 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             </div>
         </div>
     </div>
-
-    <div class="modal-overlay" id="usageModal" style="display:none;">
-        <div class="modal-content" style="max-width: 520px;">
-            <h3>📊 用量与成本</h3>
-            <div id="usageBody" style="font-size: 13px; color: #374151;">加载中…</div>
-            <div class="modal-btns">
-                <a class="btn-cancel" href="/dashboard" target="_blank" style="text-decoration:none;display:inline-block;">打开完整仪表盘 ↗</a>
-                <button class="btn-cancel" onclick="closeUsagePanel()">关闭</button>
-            </div>
-        </div>
     </div>
 
     <script>
@@ -842,6 +832,56 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             }
         }
 
+            function formatTokens(n) {
+                n = Number(n) || 0;
+                return n.toLocaleString("en-US");
+            }
+
+
+            function formatCost(cost, priced) {
+                if (priced === false) return "价格未配置";
+                const c = Number(cost) || 0;
+                if (!c) return "$0";
+                if (c < 0.001) return "$" + c.toFixed(5);
+                if (c < 0.1) return "$" + c.toFixed(4);
+                return "$" + c.toFixed(3);
+            }
+
+
+            function appendUsageBadge(targetDiv, usage) {
+                if (!usage || usage.prompt_tokens === undefined) return;
+                const wrapper = targetDiv.parentElement;
+                if (!wrapper) return;
+                const old = wrapper.querySelector(".usage-badge");
+                if (old) old.remove();
+                const tokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
+                const badge = document.createElement("div");
+                badge.className = "usage-badge";
+                badge.textContent = formatTokens(tokens) + " tokens · " + formatCost(usage.cost_usd, usage.priced);
+                wrapper.appendChild(badge);
+            }
+
+
+            function renderUsageReceipt(usage, seconds) {
+                if (!usage) return;
+                if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
+                const div = document.createElement("div");
+                div.className = "usage-receipt";
+                const parts = [
+                    "本次 " + (usage.calls || 0) + " 次调用",
+                    formatTokens(usage.tokens) + " tokens",
+                    formatCost(usage.cost_usd, true),
+                ];
+                if (typeof seconds === "number" && seconds > 0) parts.push(seconds.toFixed(1) + " 秒");
+                div.innerHTML = parts.map(x => "<span>" + escapeHtml(x) + "</span>").join("") +
+                    ((usage.unpriced || []).length
+                        ? "<span class=\"usage-warn\">" + escapeHtml(usage.unpriced.join("、")) + " 未配置价格，未计入</span>"
+                        : "");
+                chatMessages.appendChild(div);
+                scrollBottom();
+            }
+
+
         function typewriterEffect(element, text, speed = 20) {
             if (!element) return;
             const id = 'type-' + Math.random().toString(36).substr(2, 9);
@@ -912,116 +952,6 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             let currentRound = 1;
 
             function scrollBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
-
-            // ==================== 用量与成本 ====================
-            function formatTokens(n) {
-                n = Number(n) || 0;
-                return n.toLocaleString("en-US");
-            }
-
-            function formatCost(cost, priced) {
-                if (priced === false) return "价格未配置";
-                const c = Number(cost) || 0;
-                if (!c) return "$0";
-                if (c < 0.001) return "$" + c.toFixed(5);
-                if (c < 0.1) return "$" + c.toFixed(4);
-                return "$" + c.toFixed(3);
-            }
-
-            function appendUsageBadge(targetDiv, usage) {
-                if (!usage || usage.prompt_tokens === undefined) return;
-                const wrapper = targetDiv.parentElement;
-                if (!wrapper) return;
-                const old = wrapper.querySelector(".usage-badge");
-                if (old) old.remove();
-                const tokens = (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
-                const badge = document.createElement("div");
-                badge.className = "usage-badge";
-                badge.textContent = formatTokens(tokens) + " tokens · " + formatCost(usage.cost_usd, usage.priced);
-                wrapper.appendChild(badge);
-            }
-
-            function renderUsageReceipt(usage, seconds) {
-                if (!usage) return;
-                if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
-                const div = document.createElement("div");
-                div.className = "usage-receipt";
-                const parts = [
-                    "本次 " + (usage.calls || 0) + " 次调用",
-                    formatTokens(usage.tokens) + " tokens",
-                    formatCost(usage.cost_usd, true),
-                ];
-                if (typeof seconds === "number" && seconds > 0) parts.push(seconds.toFixed(1) + " 秒");
-                div.innerHTML = parts.map(x => "<span>" + escapeHtml(x) + "</span>").join("") +
-                    ((usage.unpriced || []).length
-                        ? "<span class=\"usage-warn\">" + escapeHtml(usage.unpriced.join("、")) + " 未配置价格，未计入</span>"
-                        : "");
-                chatMessages.appendChild(div);
-                scrollBottom();
-            }
-
-            async function openUsagePanel() {
-                const modal = document.getElementById("usageModal");
-                const body = document.getElementById("usageBody");
-                modal.style.display = "flex";
-                body.innerHTML = "加载中…";
-                try {
-                    const resp = await fetch("/usage/stats?days=7", { headers: { "X-API-Key": API_KEY } });
-                    const payload = await resp.json();
-                    if (!payload || payload.code !== 200) throw new Error((payload && payload.message) || "接口返回异常");
-                    body.innerHTML = renderUsagePanel(payload.data);
-                } catch (e) {
-                    body.innerHTML = "<div style=\"color:#dc2626;\">读取失败：" + escapeHtml(e.message || "网络异常") + "</div>";
-                }
-            }
-
-            function closeUsagePanel() {
-                document.getElementById("usageModal").style.display = "none";
-            }
-
-            function renderUsagePanel(data) {
-                const row = (label, b) =>
-                    "<tr><td style=\"padding:6px 8px;\">" + label + "</td>" +
-                    "<td style=\"text-align:right;padding:6px 8px;\">" + (b.calls || 0) + "</td>" +
-                    "<td style=\"text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;\">" + formatTokens((b.prompt_tokens || 0) + (b.completion_tokens || 0)) + "</td>" +
-                    "<td style=\"text-align:right;padding:6px 8px;font-variant-numeric:tabular-nums;\">" + formatCost(b.cost_usd, true) + "</td></tr>";
-
-                let html = "<table style=\"width:100%;border-collapse:collapse;margin-bottom:14px;\">" +
-                    "<tr style=\"color:#6b7280;font-size:12px;\"><th style=\"text-align:left;padding:4px 8px;\">范围</th>" +
-                    "<th style=\"text-align:right;padding:4px 8px;\">调用</th>" +
-                    "<th style=\"text-align:right;padding:4px 8px;\">tokens</th>" +
-                    "<th style=\"text-align:right;padding:4px 8px;\">成本</th></tr>";
-                html += row("今天", data.today || {});
-                html += row("最近 " + (data.window_days || 7) + " 天", data.window || {});
-                html += row("累计", data.total || {});
-                html += "</table>";
-
-                const models = data.by_model || [];
-                if (models.length) {
-                    const max = Math.max.apply(null, models.map(m => m.calls || 0)) || 1;
-                    html += "<div style=\"font-size:12px;color:#6b7280;margin-bottom:6px;\">按模型（累计）</div>";
-                    html += models.map(m => {
-                        const pct = Math.round((m.calls || 0) / max * 100);
-                        return "<div style=\"margin-bottom:6px;\">" +
-                            "<div style=\"display:flex;justify-content:space-between;font-size:12px;\">" +
-                            "<span>" + escapeHtml(modelDisplayName(m.model)) + "</span>" +
-                            "<span style=\"color:#6b7280;\">" + (m.calls || 0) + " 次 · " + formatTokens((m.prompt_tokens || 0) + (m.completion_tokens || 0)) + " tok · " + formatCost(m.cost_usd, true) + "</span></div>" +
-                            "<div style=\"height:6px;background:#eef2ff;border-radius:3px;overflow:hidden;\">" +
-                            "<div style=\"height:100%;width:" + pct + "%;background:#6366f1;\"></div></div></div>";
-                    }).join("");
-                } else {
-                    html += "<div style=\"color:#9ca3af;\">还没有调用记录。</div>";
-                }
-
-                if ((data.total || {}).unpriced_calls) {
-                    html += "<div style=\"margin-top:10px;font-size:12px;color:#b45309;\">有 " + data.total.unpriced_calls +
-                        " 次调用的模型没配价格，上面的成本偏低了。</div>";
-                }
-                if (data.truncated) {
-                    html += "<div style=\"margin-top:6px;font-size:12px;color:#b45309;\">日志太大，只统计了最近 " + data.rows + " 条。</div>";
-                }
-                return html;
-            }
 
             function createBlock(round, label) {
                 const block = document.createElement('div');
