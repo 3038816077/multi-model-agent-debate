@@ -1153,7 +1153,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     const res = await fetch('/upload', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-                        body: JSON.stringify({ filename: file.name, content_base64: reader.result })
+                        body: JSON.stringify({ filename: file.name, content_base64: reader.result, session_id: sessionId || ensureSessionId() })
                     });
                     const data = await res.json();
                     if (!res.ok || data.code !== 200) throw new Error((data && data.message) || ('HTTP ' + res.status));
@@ -1180,7 +1180,23 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             reader.readAsDataURL(file);
         }
 
+        // 还没发过消息时也要有个 session_id，否则附件绑不到会话上
+        function ensureSessionId() {
+            if (!sessionId) {
+                sessionId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('s-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+                localStorage.setItem('agent_session_id', sessionId);
+            }
+            return sessionId;
+        }
+
         function clearAttachment() {
+            if (sessionId) {
+                fetch('/upload/detach', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    body: JSON.stringify({ session_id: sessionId })
+                }).catch(() => {});
+            }
             try { localStorage.removeItem('attached_doc'); } catch (e) {}
             attachedDoc = null;
             const chip = document.getElementById('attachChip');

@@ -26,7 +26,7 @@ from app.db.database import SessionLocal
 from app.db.crud import (get_messages, save_message, get_or_create_session,
                          update_long_term_memory, get_user_memory, update_user_memory)
 from app.middleware.auth import limiter, verify_api_key
-from app.api.upload import load_document
+from app.api.upload import load_document, resolve_session_doc
 
 # 注入到提示词里的文档正文上限（字），超出的部分截断并告知模型
 MAX_DOC_CHARS_IN_PROMPT = 12000
@@ -119,7 +119,9 @@ def _document_message(doc_id: str):
             f"【用户上传的文档：{doc['filename']}（{doc.get('kind','文档')}，共 {doc.get('chars', len(text))} 字）】\n"
             f"{text}{tail}\n"
             "【文档结束】\n"
-            "请优先依据以上文档内容回答；文档里没有的信息要明确说“文档中未提及”，不要编造。"
+            "请优先依据以上文档内容回答。文档里的数字、结论、事实不要编造；"
+            "但评价、修改建议、方案设计这类问题，可以基于内容给出你自己的判断，并注明是你的建议。"
+            "确实没提到的具体信息，要说明“文档中未提及”。"
         ),
     }
 
@@ -494,6 +496,12 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
             known_info.append("已知信息：" + city_weather)
     
     # 上传的 Word / PDF：正文作为 system 消息插到本轮提问之前
+    # 前端没带附件时，沿用这个会话上次上传的文档：追问「怎么修改」不用再传一遍
+    if not request_body.attachment_id:
+        _session_doc = resolve_session_doc(session_id)
+        if _session_doc:
+            request_body.attachment_id = _session_doc
+            logger.info("【附件】沿用本会话上次的文档")
     if request_body.attachment_id:
         doc_msg = _document_message(request_body.attachment_id)
         if doc_msg:
@@ -669,6 +677,12 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
             known_info.append("已知信息：" + city_weather)
     
     # 上传的 Word / PDF：正文作为 system 消息插到本轮提问之前
+    # 前端没带附件时，沿用这个会话上次上传的文档：追问「怎么修改」不用再传一遍
+    if not request_body.attachment_id:
+        _session_doc = resolve_session_doc(session_id)
+        if _session_doc:
+            request_body.attachment_id = _session_doc
+            logger.info("【附件】沿用本会话上次的文档")
     if request_body.attachment_id:
         doc_msg = _document_message(request_body.attachment_id)
         if doc_msg:
@@ -1220,6 +1234,12 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     if _user_memory:
         group_query = f"【用户长期信息（跨会话）】\n{_user_memory}\n\n{group_query}"
     # 上传的文档：整段拼进 query，各模型独立作答和分歧分析都能看到原文
+    # 前端没带附件时，沿用这个会话上次上传的文档：追问「怎么修改」不用再传一遍
+    if not request_body.attachment_id:
+        _session_doc = resolve_session_doc(session_id)
+        if _session_doc:
+            request_body.attachment_id = _session_doc
+            logger.info("【附件】沿用本会话上次的文档")
     if request_body.attachment_id:
         doc = load_document(request_body.attachment_id)
         if doc:
@@ -1231,7 +1251,9 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             group_query = (
                 f"【用户上传的文档：{doc['filename']}（{doc.get('kind', '文档')}，共 {doc.get('chars', len(text))} 字）】\n"
                 f"{text}{tail}\n【文档结束】\n\n"
-                "请所有专家基于以上文档内容回答下面的问题；文档里没有的信息要明确说明“文档中未提及”，不要编造。\n\n"
+                "请所有专家基于以上文档内容回答下面的问题。文档里的数字、结论、事实不要编造；"
+                "但如果用户要的是评价、修改建议、下一步方案，请基于文档内容给出你的专业判断，"
+                "并说明这是你的建议而不是文档原文。\n\n"
                 f"用户问题：{request_body.message}"
             )
             logger.info(f"【多模型并行】已注入文档 {doc['filename']}（{doc.get('chars', 0)} 字，截断={cut}）")

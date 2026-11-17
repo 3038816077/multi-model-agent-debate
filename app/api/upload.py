@@ -28,14 +28,78 @@ MAX_BYTES = 15 * 1024 * 1024      # 单文件 15MB
 PREVIEW_CHARS = 200               # 返回给前端展示的开头预览
 _DOC_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
+# 会话 -> 最近一次附件：追问时不用前端再传一遍（刷新、换标签页都不丢）
+SESSION_DOC_PATH = os.path.join(BASE_DIR, "data", "session_docs.json")
+SESSION_DOC_TTL = 12 * 3600
+
+
+def _read_session_docs() -> dict:
+    try:
+        with open(SESSION_DOC_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_session_docs(data: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(SESSION_DOC_PATH), exist_ok=True)
+        with open(SESSION_DOC_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning(f"[附件] 会话绑定写入失败：{e}")
+
+
+def bind_session_doc(session_id: str, doc_id: str) -> None:
+    if not session_id or not doc_id:
+        return
+    data = _read_session_docs()
+    data[session_id] = {"doc_id": doc_id, "ts": __import__("time").time()}
+    # 顺手清掉过期条目，避免文件无限增长
+    now = __import__("time").time()
+    data = {k: v for k, v in data.items()
+            if isinstance(v, dict) and now - v.get("ts", 0) < SESSION_DOC_TTL * 2}
+    _write_session_docs(data)
+
+
+def resolve_session_doc(session_id: str) -> str:
+    """取这个会话最近一次附件；超过 TTL 视为失效。"""
+    if not session_id:
+        return ""
+    entry = _read_session_docs().get(session_id) or {}
+    doc_id = entry.get("doc_id") or ""
+    if not doc_id:
+        return ""
+    if __import__("time").time() - entry.get("ts", 0) > SESSION_DOC_TTL:
+        return ""
+    return doc_id
+
+
+def unbind_session_doc(session_id: str) -> None:
+    data = _read_session_docs()
+    if data.pop(session_id, None) is not None:
+        _write_session_docs(data)
+
 
 class UploadRequest(BaseModel):
     filename: str
     content_base64: str
+    session_id: str = ""
 
 
 def _paths(doc_id: str):
     return os.path.join(UPLOAD_DIR, doc_id + ".json")
+class DetachRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/upload/detach", summary="解除会话与文档的绑定")
+async def detach_document(request: Request, body: DetachRequest, auth: bool = Depends(verify_api_key)):
+    unbind_session_doc(body.session_id)
+    return {"code": 200, "message": "已解除绑定"}
+
+
 
 
 def load_document(doc_id: str):
@@ -87,6 +151,10 @@ async def upload_document(request: Request, body: UploadRequest, auth: bool = De
         return {"code": 500, "message": f"文档解析失败：{e}"}
 
     doc_id = uuid.uuid4().hex
+
+    # 记在会话上：下一步追问即使用户没带 attachment_id 也能找回这份文档
+    if body.session_id:
+        bind_session_doc(body.session_id, doc_id)
     record = {
         "doc_id": doc_id,
         "filename": filename,
