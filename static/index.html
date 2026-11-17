@@ -849,6 +849,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 
 
             function appendUsageBadge(targetDiv, usage) {
+                try {
                 if (!usage || usage.prompt_tokens === undefined) return;
                 const wrapper = targetDiv.parentElement;
                 if (!wrapper) return;
@@ -859,12 +860,13 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 badge.className = "usage-badge";
                 badge.textContent = formatTokens(tokens) + " tokens · " + formatCost(usage.cost_usd, usage.priced);
                 wrapper.appendChild(badge);
+                } catch (e) { console.warn('用量徽标渲染失败', e); }
             }
 
 
             function renderUsageReceipt(usage, seconds) {
+                try {
                 if (!usage) return;
-                if (currentLoadingDiv) { currentLoadingDiv.remove(); currentLoadingDiv = null; }
                 const div = document.createElement("div");
                 div.className = "usage-receipt";
                 const parts = [
@@ -879,6 +881,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         : "");
                 chatMessages.appendChild(div);
                 scrollBottom();
+                } catch (e) { console.warn('收据渲染失败', e); }
             }
 
 
@@ -1106,6 +1109,22 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 
         // ==================== 附件（Word / PDF） ====================
         let attachedDoc = null;
+
+        // 刷新页面后恢复上次的附件：文档解析结果存在服务端，doc_id 还是有效的
+        (function restoreAttachment() {
+            try {
+                const saved = localStorage.getItem('attached_doc');
+                if (!saved) return;
+                attachedDoc = JSON.parse(saved);
+                const chip = document.getElementById('attachChip');
+                if (!chip || !attachedDoc || !attachedDoc.doc_id) return;
+                chip.style.display = 'flex';
+                chip.innerHTML =
+                    '<span class="attach-name">📎 ' + escapeHtml(attachedDoc.filename) + '</span>' +
+                    '<span class="attach-meta">' + escapeHtml(attachedDoc.kind) + ' · ' + (attachedDoc.chars || 0).toLocaleString() + ' 字</span>' +
+                    '<button class="attach-remove" onclick="clearAttachment()" title="移除附件">✕</button>';
+            } catch (e) { attachedDoc = null; }
+        })();
         const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
         function escapeHtml(s) {
@@ -1139,6 +1158,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     const data = await res.json();
                     if (!res.ok || data.code !== 200) throw new Error((data && data.message) || ('HTTP ' + res.status));
                     attachedDoc = data.data;
+                    try { localStorage.setItem('attached_doc', JSON.stringify(attachedDoc)); } catch (e) {}
                     chip.innerHTML =
                         '<span class="attach-name">📎 ' + escapeHtml(attachedDoc.filename) + '</span>' +
                         '<span class="attach-meta">' + escapeHtml(attachedDoc.kind) + ' · ' + attachedDoc.chars.toLocaleString() + ' 字</span>' +
@@ -1161,6 +1181,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         }
 
         function clearAttachment() {
+            try { localStorage.removeItem('attached_doc'); } catch (e) {}
             attachedDoc = null;
             const chip = document.getElementById('attachChip');
             if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }

@@ -31,6 +31,9 @@ from app.api.upload import load_document
 # 注入到提示词里的文档正文上限（字），超出的部分截断并告知模型
 MAX_DOC_CHARS_IN_PROMPT = 12000
 
+# 并行模式带多少条上文：不带的话第二轮追问没有指代对象
+GROUP_HISTORY_MESSAGES = 6
+
 
 def _model_extra(model_id: str) -> dict:
     """注册表里给该模型配了 extra_body 就带上（例如豆包 2.1 关掉深度思考）。"""
@@ -1191,7 +1194,25 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     )
     
     session_id = request_body.session_id or str(uuid.uuid4())
+    # 先取上文再存本轮提问，否则这句话会把自己带进历史
+    _history = get_messages(db, session_id, limit=GROUP_HISTORY_MESSAGES)
     save_message(db, session_id, "user", request_body.message)
+
+    _history_block = ""
+    if _history:
+        _lines = []
+        for _m in _history:
+            _text = (_m.get("content") or "").strip()
+            if not _text:
+                continue
+            _role = "用户" if _m.get("role") == "user" else "助手"
+            _lines.append(f"{_role}：{_text[:800]}")
+        if _lines:
+            _history_block = (
+                "【对话上文】\n" + "\n".join(_lines) + "\n【对话上文结束】\n"
+                "（以上是之前几轮对话；本轮问题里的“它/这个/怎么改”要结合上文理解）\n\n"
+            )
+            logger.info(f"【多模型并行】带入上文 {len(_lines)} 条")
 
     # 跨会话记忆拼在 query 最前面：首轮 / 互评 / 首席总结三个阶段都自动带上
     _user_memory = get_user_memory(db) if ENABLE_USER_MEMORY else ""
@@ -1216,6 +1237,9 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
             logger.info(f"【多模型并行】已注入文档 {doc['filename']}（{doc.get('chars', 0)} 字，截断={cut}）")
         else:
             logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
+
+    if _history_block:
+        group_query = _history_block + group_query
 
     if request_body.chief_model in request_body.staff_models:
         async def error_gen():
