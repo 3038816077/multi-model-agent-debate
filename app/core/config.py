@@ -28,8 +28,8 @@ try:
                     timeout=LLM_TIMEOUT, max_retries=LLM_MAX_RETRIES)
 except Exception:
     client = None
-# 默认模型：.env 里配 DEFAULT_MODEL_ID，没配就用 qwen-plus 兜底
-DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "qwen-plus")
+# 默认模型：.env 里配 DEFAULT_MODEL_ID，没配就用 doubao-seed-2-1 兜底
+DEFAULT_MODEL_ID = os.getenv("DEFAULT_MODEL_ID", "doubao-seed-2-1")
 MODEL_NAME = DEFAULT_MODEL_ID
 
 # ========== 多模型注册表配置 ==========

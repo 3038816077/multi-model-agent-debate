@@ -37,26 +37,11 @@ TIER_STRONG = "strong"
 # 每一档的候选模型，从前往后取第一个在注册表里真实存在的。
 # 换模型只需要改这里，不用动业务代码。
 MODEL_TIERS = {
-    TIER_CHEAP: ["glm-4-flash", "doubao-seed-2-1-lite", "qwen-plus"],
-    TIER_MID: ["gpt-5.6", "deepseek-chat", "kimi-k3.1-pro", "glm-4-flash"],
-    TIER_STRONG: ["gpt-6.1-sol", "claude-opus-4-6", "gpt-6", "gpt-5.6", "claude-sonnet-4-6"],
-}
-
-# 每百万 token 的参考单价（美元，input, output），只用于统计成本。
-# 价格为公开价的大致值，请按自己实际账单调整；不认识的模型按 0 计。
-MODEL_PRICE_PER_M = {
-    "glm-4-flash": (0.00, 0.00),
-    "qwen-plus": (0.40, 1.20),
-    "qwen3.8-flash": (0.05, 0.20),   # 待核对：按百炼控制台实际单价改
-    "doubao-seed-2-1-lite": (0.15, 0.30),
-    "deepseek-chat": (0.27, 1.10),
-    "kimi-k3.1-pro": (0.60, 2.50),
-    "gpt-5.6": (1.25, 10.00),
-    "gpt-6": (2.50, 15.00),
-    "gpt-6.1-sol": (3.00, 15.00),
-    "claude-sonnet-4-6": (3.00, 15.00),
-    "claude-opus-4-6": (15.00, 75.00),
-}
+    # 只用国内模型（中转站额度已停用），候选必须是 .env 里 MODEL_REGISTRY 的 key。
+    TIER_CHEAP: ["doubao-seed-2-1", "kimi-k3.1-pro"],
+    TIER_MID: ["kimi-k3.1-pro", "doubao-seed-2-1"],
+    TIER_STRONG: ["deepseek-v4-pro", "kimi-k3.1-pro"],
+};
 
 # 需要强模型：代码、推理、方案设计、长文分析
 _STRONG_HINTS = re.compile(
@@ -211,3 +196,10 @@ def log_usage(trace_id: str, model: str, prompt_tokens: int, completion_tokens: 
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as e:
         logger.warning(f"[用量统计] 写入失败（不影响主流程）：{e}")
+MODEL_PRICE_PER_M = {
+    # 每百万 token 的美元单价（input, output），只用于统计成本，按实际账单调整。
+    # 没配单价的模型按 0 计，仪表盘会标「未配置价格」而不是假装免费。
+    "doubao-seed-2-1-lite-260915": (0.15, 0.30),
+    "kimi-k3.1-pro": (0.60, 2.50),
+    "deepseek-v4-pro": (0.55, 2.20),   # 估计值：按 V3 与 Pro 档位折算，请按账单核对
+};
