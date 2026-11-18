@@ -1,0 +1,11 @@
+# 只开语法错误和未定义名字：这两类是真 bug，其余风格问题交给 review。
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = ["E9", "F"]
+ignore = ["F401", "F841"]
+
+[lint.per-file-ignores]
+"scripts/*" = ["F401", "F841"]
+"tests/*" = ["E402"]

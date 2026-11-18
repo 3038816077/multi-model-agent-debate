@@ -1111,6 +1111,12 @@ def _render_divergence_data(data: dict, dropped_quote: int = 0, dropped_verify: 
         if out:
             out.append("")
         out += _block("**分歧**", confirmed)
+    elif not unconfirmed:
+        # 有共识但没有任何分歧：也要明确写出来，
+        # 否则读者只看到一串共识，不知道到底有没有做过对比。
+        if out:
+            out.append("")
+        out += ["**分歧**", "- 没有发现实质矛盾"]
     if oneoff:
         if out:
             out.append("")

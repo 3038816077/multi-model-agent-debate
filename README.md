@@ -351,3 +351,21 @@ Yes. As long as it speaks the OpenAI API (vLLM, Ollama, LM Studio all do), point
 ## 📄 License
 
 [MIT](LICENSE) © 2026
+
+## Tests
+
+```bash
+python scripts/run_tests.py     # 37 offline tests, no API calls, no cost
+python -m pytest tests -q       # if pytest is installed
+```
+
+Everything runs offline — model calls are bypassed. Coverage targets the bugs that actually happened:
+fabricated quotes being downgraded, stance grouping, slide ordering, tier candidates pointing at removed models.
+
+## Health check
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+`200` when usable, `503` on fatal misconfiguration (e.g. empty registry). `problems` carry `fatal` / `warn` / `info` levels.

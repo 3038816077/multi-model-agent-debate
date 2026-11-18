@@ -12,6 +12,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.chat import router as chat_router
 from app.api.upload import router as upload_router
+from app.api.health import router as health_router
 from app.db.vector_store import init_knowledge_base
 from app.db import models
 from app.db.database import engine
@@ -39,6 +40,7 @@ app.add_middleware(
 )
 app.include_router(chat_router)
 app.include_router(upload_router)
+app.include_router(health_router)
 
 # 7. 挂载静态文件
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -46,6 +48,25 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # 8. 注册启动事件
 @app.on_event("startup")
 def startup_event():
+    # 启动自检：配置类问题在这里说清楚，别等用户点发送才 500
+    try:
+        from app.core.selfcheck import validate_startup, has_fatal
+
+        problems = validate_startup()
+        for item in problems:
+            level = item.get("level")
+            message = f"[自检/{item.get('code')}] {item.get('message')}"
+            if level == "fatal":
+                logger.error(message)
+            elif level == "warn":
+                logger.warning(message)
+            else:
+                logger.info(message)
+        if has_fatal(problems):
+            logger.error("启动自检发现致命问题：服务能起来，但对话会失败，请按上面提示修复 .env")
+    except Exception as e:
+        logger.warning(f"启动自检异常（不影响服务启动）：{e}")
+
     init_knowledge_base(BASE_DIR)
 
 @app.get("/")
