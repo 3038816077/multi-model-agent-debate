@@ -547,7 +547,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 
         const API_KEY = 'my-secret-key-123';
         // 默认选中的单模型（可用 localStorage 覆盖）
-        const DEFAULT_MODEL_ID = 'qwen-plus';
+        const DEFAULT_MODEL_ID = 'doubao-seed-2-1';
 
         // 安全渲染 Markdown：CDN 不可用或解析异常时退化为纯文本，绝不把内容吞掉
         function escapeHtml(s) {
@@ -592,22 +592,15 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         let typingIntervals = {};
 
         // 名字匹配是「包含」判断，越具体的 key 要放越前面（gpt-6.1 要排在 gpt-6 之前）
+        // 名字匹配是「包含」判断，越具体的 key 要放越前面
         const modelVisualConfig = {
+            'kimi-k3.1-pro': { name: 'Kimi K3.1 Pro', icon: '🌙', color: '#8b5cf6' },
             'kimi': { name: 'Kimi', icon: '🌙', color: '#8b5cf6' },
-            'moonshot': { name: 'Kimi', icon: '🌙', color: '#8b5cf6' },
-            'qwen': { name: '通义', icon: '☁️', color: '#ff6a00' },
-            'glm': { name: '智谱', icon: '🧠', color: '#10b981' },
+            'deepseek-v4-pro': { name: 'DeepSeek V4 Pro', icon: '🐋', color: '#4f46e5' },
             'deepseek': { name: 'DeepSeek', icon: '🐋', color: '#4f46e5' },
+            'doubao-seed-2-1': { name: '豆包 Seed 2.1 Lite', icon: '🫘', color: '#3b82f6' },
             'doubao': { name: '豆包', icon: '🫘', color: '#3b82f6' },
             'volc': { name: '豆包', icon: '🫘', color: '#3b82f6' },
-            'sonnet': { name: 'Claude Sonnet', icon: '🎭', color: '#d97757' },
-            'opus': { name: 'Claude Opus', icon: '🎩', color: '#b45309' },
-            'haiku': { name: 'Claude Haiku', icon: '🍃', color: '#059669' },
-            'claude': { name: 'Claude', icon: '🎭', color: '#d97757' },
-            'gpt-6.1': { name: 'GPT-6.1', icon: '🌟', color: '#0ea5e9' },
-            'gpt-6': { name: 'GPT-6', icon: '✨', color: '#10a37f' },
-            'gpt-5.6': { name: 'GPT-5.6', icon: '💫', color: '#6366f1' },
-            'gpt': { name: 'GPT', icon: '✨', color: '#10a37f' },
             'default': { name: 'AI', icon: '🤖', color: '#6b7280' }
         };
         function getModelVisual(modelName) {
