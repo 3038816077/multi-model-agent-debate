@@ -10,7 +10,7 @@ from typing import Optional, List
 import app.tools.weather
 import app.tools.knowledge
 import app.tools.web_search
-from app.core.config import USAGE_LOG_PATH, DIVERGENCE_MODEL, DIVERGENCE_VERIFIER, get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
+from app.core.config import LLM_TIMEOUT, USAGE_LOG_PATH, DIVERGENCE_MODEL, DIVERGENCE_VERIFIER, get_model_max_tokens, ENABLE_USER_MEMORY, ENABLE_FAST_REPLY, client, MODEL_NAME, MAX_HISTORY_LENGTH, get_model_registry, resolve_model_id, get_model_extra_body, AUTO_ROUTE
 from app.core.llm_factory import set_llm_client, get_llm_client, mask_api_key, get_model_name, friendly_llm_error
 from app.core.router import (classify, pick_model, set_current_tier, log_usage,
                              estimate_cost, has_price, TIER_CHEAP, TIER_MID, TIER_STRONG)
@@ -1145,7 +1145,11 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
         return "", "", {}
     candidates = []
     cheap = pick_model(TIER_CHEAP)
-    order = (fallback_model, cheap) if DIVERGENCE_MODEL == "chief" else (cheap, fallback_model)
+    strong = pick_model(TIER_STRONG)
+    # 降级链：主模型 -> 强模型 -> 便宜模型。
+    # 直接掉到最便宜档会毁掉报告质量：实测 glm-4-flash 做裁判时，
+    # 四份结论一致的答案被它拆成两组"分歧"。
+    order = (fallback_model, strong, cheap) if DIVERGENCE_MODEL == "chief" else (cheap, strong, fallback_model)
     for name in order:
         if name and name not in candidates:
             candidates.append(name)
@@ -1166,6 +1170,7 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
             model=resolve_model_id(judge),
             messages=[{"role": "user", "content": prompt}],
             max_tokens=get_model_max_tokens(judge, 800),
+            timeout=max(LLM_TIMEOUT, 150),
             **_model_extra(judge),
         )
         usage = _log_resp(resp, judge, trace_id, started, "divergence")
