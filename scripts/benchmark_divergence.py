@@ -25,7 +25,12 @@ from app.api.chat import (  # noqa: E402
     GROUP_DIVERGENCE_PROMPT_GROUNDED,
     render_divergence,
 )
-from app.core.config import get_model_extra_body, get_model_registry, resolve_model_id  # noqa: E402
+from app.core.config import (  # noqa: E402
+    get_model_extra_body,
+    get_model_max_tokens,
+    get_model_registry,
+    resolve_model_id,
+)
 
 
 def analyze(item, model_key, registry, grounded=False, verifier="", timeout=180):
@@ -43,14 +48,33 @@ def analyze(item, model_key, registry, grounded=False, verifier="", timeout=180)
     extra = get_model_extra_body(model_key)
     kwargs = {"extra_body": extra} if extra else {}
     started = time.time()
-    resp = client.chat.completions.create(
-        model=resolve_model_id(model_key),
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=entry.get("max_tokens") or 800,
-        **kwargs,
-    )
+    resp = None
+    last_error = None
+    # 限流和高并发下的偶发失败要重试，否则测出来的是"被限流的模型"而不是"模型的水平"
+    for attempt in range(3):
+        try:
+            resp = client.chat.completions.create(
+                model=resolve_model_id(model_key),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=get_model_max_tokens(model_key, 2048),
+                **kwargs,
+            )
+            break
+        except Exception as e:
+            last_error = e
+            text = str(e)
+            if "429" in text or "rate" in text.lower() or "timeout" in text.lower():
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
+    if resp is None:
+        raise RuntimeError("重试 3 次仍失败：%s" % str(last_error)[:60])
     elapsed = time.time() - started
     raw = (resp.choices[0].message.content or "").strip()
+    if not raw:
+        # 思考型模型会把输出额度全用在推理上，正文为空。
+        # 这种情况必须报出来，不能当成"模型判定无分歧"，否则会被误记成漏报。
+        raise RuntimeError("返回空内容（max_tokens=%d 可能被思考吃光）" % get_model_max_tokens(model_key, 2048))
     usage = resp.usage
     tokens = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0) if usage else 0
     return render_divergence(raw, item["answers"] if grounded else None, verifier, item["query"]), elapsed, tokens
@@ -61,7 +85,11 @@ def grade(item, rendered):
 
     「未核实的分歧」也算指出过，但单独标记——它没过原文核对。
     """
-    confirmed = "**分歧**" in rendered
+    # 报告现在总会带一个「**分歧**」小标题（没有分歧时写「没有发现实质矛盾」），
+    # 所以不能只看标题就判定成"提出了分歧"，
+    # 否则每一组无冲突样本都会被算成误报。
+    no_conflict = "没有发现实质矛盾" in rendered
+    confirmed = ("**分歧**" in rendered) and not no_conflict
     tentative = "**未核实的分歧**" in rendered
     if item["conflict"]:
         if not confirmed and not tentative:
