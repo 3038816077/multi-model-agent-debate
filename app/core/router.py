@@ -39,8 +39,8 @@ TIER_STRONG = "strong"
 MODEL_TIERS = {
     # 只用国内模型（中转站额度已停用），候选必须是 .env 里 MODEL_REGISTRY 的 key。
     TIER_CHEAP: ["glm-4-flash"],
-    TIER_MID: ["kimi-k3.1-pro", "glm-4.6", "glm-4-flash"],
-    TIER_STRONG: ["deepseek-v4-flash", "glm-4.6", "kimi-k3.1-pro"],
+    TIER_MID: ["glm-4.6", "kimi-k3", "glm-4-flash"],
+    TIER_STRONG: ["deepseek-v4-pro", "kimi-k3", "glm-4.6"],
 };
 
 # 需要强模型：代码、推理、方案设计、长文分析
@@ -200,7 +200,7 @@ MODEL_PRICE_PER_M = {
     # 每百万 token 的美元单价（input, output），只用于统计成本，按实际账单调整。
     # 没配单价的模型按 0 计，仪表盘会标「未配置价格」而不是假装免费。
     "glm-4-flash": (0.00, 0.00),           # 免费档
-    "kimi-k3.1-pro": (0.60, 2.50),
-    "deepseek-v4-flash-0731": (0.15, 0.60),  # 估计值：请按账单核对
+    "kimi-k3": (0.60, 2.50),            # 估计值：当前走免费额度更划算
+    "deepseek-v4-pro": (0.55, 2.20),    # 估计值：请按账单核对
     "glm-4.6": (0.60, 2.20),               # 估计值：请按账单核对
 };
