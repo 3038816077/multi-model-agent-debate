@@ -14,4 +14,11 @@ services:
       - ./knowledge:/app/knowledge
       - ./static:/app/static
       - ./hf_cache:/root/.cache/huggingface
+    # 容器启动后模型要加载几十秒，所以 start_period 给足；探针直接打 /health
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     restart: unless-stopped
