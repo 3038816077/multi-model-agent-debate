@@ -40,7 +40,7 @@ MODEL_TIERS = {
     # 只用国内模型（中转站额度已停用），候选必须是 .env 里 MODEL_REGISTRY 的 key。
     TIER_CHEAP: ["glm-4-flash"],
     TIER_MID: ["glm-4.6", "kimi-k2.7-code", "glm-4-flash"],
-    TIER_STRONG: ["deepseek-v4-pro", "glm-4.6", "kimi-k2.7-code"],
+    TIER_STRONG: ["qwen4-max", "deepseek-v4-pro", "glm-4.6"],
 };
 
 # 需要强模型：代码、推理、方案设计、长文分析
@@ -202,5 +202,6 @@ MODEL_PRICE_PER_M = {
     "glm-4-flash": (0.00, 0.00),           # 免费档
     "kimi-k2.7-code": (0.30, 1.20),    # 估计值：code 档通常比通用档便宜
     "deepseek-v4-pro": (0.55, 2.20),    # 估计值：请按账单核对
+    "qwen4-max": (0.85, 3.40),          # 估计值：Max 档通常最贵，请按账单核对
     "glm-4.6": (0.60, 2.20),               # 估计值：请按账单核对
 };
