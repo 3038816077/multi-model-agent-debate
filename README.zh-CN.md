@@ -168,7 +168,7 @@ python run.py
 或者用 Docker（多阶段构建，一条命令）：
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build   # 已实测：容器 healthy，/health 返回 models=5
 ```
 
 ### 4. 打开页面
@@ -177,6 +177,15 @@ docker compose up -d --build
 - 接口文档：<http://127.0.0.1:8000/docs>
 
 > 首次启动会下载 Embedding 和 Reranker 模型（约 400MB），需要几分钟；之后是秒级冷启动。
+>
+> **容器内下载常常失败**（HF 直连不稳）。如果你的宿主机已经跑过本项目，模型缓存在
+> `~/.cache/huggingface`，在 `.env` 里加一行即可复用，不用重新下：
+>
+> ```bash
+> HF_CACHE=C:/Users/你的用户名/.cache/huggingface
+> ```
+>
+> 没加也没关系：compose 默认挂 `./hf_cache`，容器会尝试自行下载。
 
 ## 🔌 配置模型（不用改代码）
 
