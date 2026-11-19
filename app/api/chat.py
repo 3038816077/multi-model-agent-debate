@@ -26,7 +26,7 @@ from app.db.database import SessionLocal
 from app.db.crud import (get_messages, save_message, get_or_create_session,
                          update_long_term_memory, get_user_memory, update_user_memory)
 from app.middleware.auth import limiter, verify_api_key
-from app.api.upload import load_document, resolve_session_doc
+from app.api.upload import load_document, resolve_session_doc, resolve_session_docs
 
 # 注入到提示词里的文档正文上限（字），超出的部分截断并告知模型
 MAX_DOC_CHARS_IN_PROMPT = 12000
@@ -85,7 +85,7 @@ def _apply_auto_route(request_body):
 
     tier = classify(
         request_body.message,
-        has_doc=bool(request_body.attachment_id),
+        has_doc=bool(request_doc_ids(request_body)),
         web_search=bool(request_body.enable_web_search),
     )
     if not tier:
@@ -102,11 +102,67 @@ def _apply_auto_route(request_body):
     return {"tier": tier, "model": model}
 
 
-def _document_message(doc_id: str):
-    """把上传文档的正文包装成一条 system 消息；文档不存在返回 None。"""
-    doc = load_document(doc_id)
-    if not doc:
+MAX_DOCS_PER_TURN = 3
+
+
+def request_doc_ids(request_body) -> list:
+    """本轮要带的文档：attachment_ids 优先，其次单个 attachment_id。"""
+    ids = []
+    for did in (getattr(request_body, "attachment_ids", None) or []):
+        if did and did not in ids:
+            ids.append(did)
+    primary = getattr(request_body, "attachment_id", None)
+    if primary and primary not in ids:
+        ids.insert(0, primary)
+    return ids[:MAX_DOCS_PER_TURN]
+
+
+def _doc_block(index: int, doc: dict, total: int) -> str:
+    """把一份文档渲染成带编号的文本块。"""
+    text = doc.get("text", "")
+    cut = len(text) > MAX_DOC_CHARS_IN_PROMPT
+    if cut:
+        text = text[:MAX_DOC_CHARS_IN_PROMPT]
+    tail = f"\n（这份文档较长，以上只截取了前 {MAX_DOC_CHARS_IN_PROMPT} 字）" if cut else ""
+    label = f"文档{index}" if total > 1 else "文档"
+    return (
+        f"【{label}：{doc['filename']}（{doc.get('kind', '文档')}，共 {doc.get('chars', len(text))} 字）】\n"
+        f"{text}{tail}\n【{label}结束】"
+    )
+
+
+def _documents_message(doc_ids: list):
+    """把一份或多份文档包装成一条 system 消息；全都取不到返回 None。"""
+    docs = []
+    for did in (doc_ids or [])[:MAX_DOCS_PER_TURN]:
+        doc = load_document(did)
+        if doc:
+            docs.append(doc)
+    if not docs:
         return None
+
+    blocks = "\n\n".join(_doc_block(i + 1, d, len(docs)) for i, d in enumerate(docs))
+    if len(docs) > 1:
+        instruction = (
+            "用户上传了多份文档。回答时请：\n"
+            "1. 先判断问题是在问单份还是让多份互相对比（差异 / 哪个更好 / 是否一致）\n"
+            "2. 对比类问题要**逐条对应**，明确指出是哪份文档的哪一点，不要笼统说\n"
+            "3. 文档之间的冲突要指出来，并说明各自依据\n"
+            "4. 文档里的数字、结论、事实不要编造；评价和建议可以给，但要注明是你的判断\n"
+            "5. 确实没提到的具体信息，说明“文档中未提及”"
+        )
+    else:
+        instruction = (
+            "请优先依据以上文档内容回答。文档里的数字、结论、事实不要编造；"
+            "但评价、修改建议、方案设计这类问题，可以基于内容给出你自己的判断，并注明是你的建议。"
+            "确实没提到的具体信息，要说明“文档中未提及”。"
+        )
+    return {"role": "system", "content": blocks + "\n\n" + instruction}
+
+
+def _document_message(doc_id: str):
+    """单文档版本（保留旧接口）。"""
+    return _documents_message([doc_id])
     text = doc.get("text", "")
     truncated = len(text) > MAX_DOC_CHARS_IN_PROMPT
     if truncated:
@@ -131,6 +187,8 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     attachment_id: Optional[str] = None
+    # 多文件对比：可以一次带多份，最多 3 份
+    attachment_ids: Optional[List[str]] = None
     user_api_key: Optional[str] = None
     user_base_url: Optional[str] = None
     user_model_name: Optional[str] = None
@@ -142,6 +200,7 @@ class GroupChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     attachment_id: Optional[str] = None
+    attachment_ids: Optional[List[str]] = None
     chief_model: str
     staff_models: List[str]
     # debate  = 独立作答 → 交叉互评 → 首席总结（默认，质量最高）
@@ -495,19 +554,16 @@ def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_
         for city_weather in WEATHER_CACHE[session_id].values():
             known_info.append("已知信息：" + city_weather)
     
-    # 上传的 Word / PDF：正文作为 system 消息插到本轮提问之前
-    # 前端没带附件时，沿用这个会话上次上传的文档：追问「怎么修改」不用再传一遍
-    if not request_body.attachment_id:
-        _session_doc = resolve_session_doc(session_id)
-        if _session_doc:
-            request_body.attachment_id = _session_doc
-            logger.info("【附件】沿用本会话上次的文档")
-    if request_body.attachment_id:
-        doc_msg = _document_message(request_body.attachment_id)
+    # 上传的文档：正文作为 system 消息插到本轮提问之前。
+    # 前端没带附件时沿用会话里挂着的文档（可能有多份），追问不用再传一遍。
+    _doc_ids = request_doc_ids(request_body) or resolve_session_docs(session_id)
+    if _doc_ids:
+        doc_msg = _documents_message(_doc_ids)
         if doc_msg:
             messages.append(doc_msg)
+            logger.info(f"【附件】注入 {len(_doc_ids)} 份文档")
         else:
-            logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
+            logger.warning(f"附件 {_doc_ids} 不存在或已过期，本轮忽略")
 
     user_content = request_body.message
     if known_info:
@@ -676,19 +732,16 @@ async def chat_stream(request: Request, request_body: ChatRequest, db: Session =
         for city_weather in WEATHER_CACHE[session_id].values():
             known_info.append("已知信息：" + city_weather)
     
-    # 上传的 Word / PDF：正文作为 system 消息插到本轮提问之前
-    # 前端没带附件时，沿用这个会话上次上传的文档：追问「怎么修改」不用再传一遍
-    if not request_body.attachment_id:
-        _session_doc = resolve_session_doc(session_id)
-        if _session_doc:
-            request_body.attachment_id = _session_doc
-            logger.info("【附件】沿用本会话上次的文档")
-    if request_body.attachment_id:
-        doc_msg = _document_message(request_body.attachment_id)
+    # 上传的文档：正文作为 system 消息插到本轮提问之前。
+    # 前端没带附件时沿用会话里挂着的文档（可能有多份），追问不用再传一遍。
+    _doc_ids = request_doc_ids(request_body) or resolve_session_docs(session_id)
+    if _doc_ids:
+        doc_msg = _documents_message(_doc_ids)
         if doc_msg:
             messages.append(doc_msg)
+            logger.info(f"【附件】注入 {len(_doc_ids)} 份文档")
         else:
-            logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
+            logger.warning(f"附件 {_doc_ids} 不存在或已过期，本轮忽略")
 
     user_content = request_body.message
     if known_info:
@@ -1244,32 +1297,16 @@ async def chat_group_stream(request: Request, request_body: GroupChatRequest, db
     group_query = request_body.message
     if _user_memory:
         group_query = f"【用户长期信息（跨会话）】\n{_user_memory}\n\n{group_query}"
-    # 上传的文档：整段拼进 query，各模型独立作答和分歧分析都能看到原文
-    # 前端没带附件时，沿用这个会话上次上传的文档：追问「怎么修改」不用再传一遍
-    if not request_body.attachment_id:
-        _session_doc = resolve_session_doc(session_id)
-        if _session_doc:
-            request_body.attachment_id = _session_doc
-            logger.info("【附件】沿用本会话上次的文档")
-    if request_body.attachment_id:
-        doc = load_document(request_body.attachment_id)
-        if doc:
-            text = doc.get("text", "")
-            cut = len(text) > MAX_DOC_CHARS_IN_PROMPT
-            if cut:
-                text = text[:MAX_DOC_CHARS_IN_PROMPT]
-            tail = "\n（文档较长，以上只截取了开头部分）" if cut else ""
-            group_query = (
-                f"【用户上传的文档：{doc['filename']}（{doc.get('kind', '文档')}，共 {doc.get('chars', len(text))} 字）】\n"
-                f"{text}{tail}\n【文档结束】\n\n"
-                "请所有专家基于以上文档内容回答下面的问题。文档里的数字、结论、事实不要编造；"
-                "但如果用户要的是评价、修改建议、下一步方案，请基于文档内容给出你的专业判断，"
-                "并说明这是你的建议而不是文档原文。\n\n"
-                f"用户问题：{request_body.message}"
-            )
-            logger.info(f"【多模型并行】已注入文档 {doc['filename']}（{doc.get('chars', 0)} 字，截断={cut}）")
+    # 上传的文档：整段拼进 query，各模型独立作答和分歧分析都能看到原文。
+    # 前端没带附件时沿用会话里挂着的文档（可能有多份）。
+    _doc_ids = request_doc_ids(request_body) or resolve_session_docs(session_id)
+    if _doc_ids:
+        doc_msg = _documents_message(_doc_ids)
+        if doc_msg:
+            group_query = doc_msg["content"] + "\n\n" + f"用户问题：{request_body.message}"
+            logger.info(f"【多模型并行】已注入 {len(_doc_ids)} 份文档")
         else:
-            logger.warning(f"附件 {request_body.attachment_id} 不存在或已过期，本轮忽略")
+            logger.warning(f"附件 {_doc_ids} 不存在或已过期，本轮忽略")
 
     if _history_block:
         group_query = _history_block + group_query

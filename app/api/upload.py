@@ -31,6 +31,7 @@ _DOC_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 # 会话 -> 最近一次附件：追问时不用前端再传一遍（刷新、换标签页都不丢）
 SESSION_DOC_PATH = os.path.join(BASE_DIR, "data", "session_docs.json")
 SESSION_DOC_TTL = 12 * 3600
+MAX_DOCS_PER_SESSION = 3
 
 
 def _read_session_docs() -> dict:
@@ -52,28 +53,42 @@ def _write_session_docs(data: dict) -> None:
 
 
 def bind_session_doc(session_id: str, doc_id: str) -> None:
+    """把这个文档挂到会话上；多次上传会累积，不会互相覆盖。"""
     if not session_id or not doc_id:
         return
     data = _read_session_docs()
-    data[session_id] = {"doc_id": doc_id, "ts": __import__("time").time()}
-    # 顺手清掉过期条目，避免文件无限增长
+    entry = data.get(session_id) or {}
+    # 兼容旧格式（单文档）
+    ids = list(entry.get("doc_ids") or ([entry["doc_id"]] if entry.get("doc_id") else []))
+    if doc_id in ids:
+        ids.remove(doc_id)
+    ids.append(doc_id)
+    # 一轮最多带 3 份，超出的丢掉最旧的
+    ids = ids[-MAX_DOCS_PER_SESSION:]
     now = __import__("time").time()
+    data[session_id] = {"doc_ids": ids, "doc_id": ids[-1], "ts": now}
     data = {k: v for k, v in data.items()
             if isinstance(v, dict) and now - v.get("ts", 0) < SESSION_DOC_TTL * 2}
     _write_session_docs(data)
 
 
-def resolve_session_doc(session_id: str) -> str:
-    """取这个会话最近一次附件；超过 TTL 视为失效。"""
+def resolve_session_docs(session_id: str) -> list:
+    """取这个会话挂着的所有附件（按上传顺序）；超过 TTL 视为失效。"""
     if not session_id:
-        return ""
+        return []
     entry = _read_session_docs().get(session_id) or {}
-    doc_id = entry.get("doc_id") or ""
-    if not doc_id:
-        return ""
     if __import__("time").time() - entry.get("ts", 0) > SESSION_DOC_TTL:
-        return ""
-    return doc_id
+        return []
+    ids = entry.get("doc_ids")
+    if not ids and entry.get("doc_id"):
+        ids = [entry["doc_id"]]
+    return [x for x in (ids or []) if x]
+
+
+def resolve_session_doc(session_id: str) -> str:
+    """兼容旧调用：只要最近的一份。"""
+    ids = resolve_session_docs(session_id)
+    return ids[-1] if ids else ""
 
 
 def unbind_session_doc(session_id: str) -> None:

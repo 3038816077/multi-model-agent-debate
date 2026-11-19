@@ -121,6 +121,7 @@ Both layers are merged into a single system message at request time, so the prom
 | 🧠 | **Follow-ups keep context** | The last 6 messages are prepended to the prompt, so "how should I fix it?" in parallel mode refers to the previous exchange instead of a dangling question |
 | 💳 | **Cost receipt 🆕 dashboard** | `/dashboard` is a standalone page: today's cost / tokens / calls / latency, a 14-day bar chart, per-model and **per-scene** breakdown (chat vs parallel vs divergence vs image OCR), and the latest 20 calls. |
 | 🧾 | **Per-run receipt** | Every answer carries its own token count and price; each run ends with `4 calls · 6,936 tokens · $0.00032`. A 📊 panel aggregates today / 7 days / total per model. Models without a price in the table are flagged instead of silently costed as $0. |
+| 📄 | **Document & image Q&A (up to 3 at once)** | Attach several files and ask "what changed between these versions" — the panel answers document by document. |
 | 📄 | **Document & image Q&A** | Upload `.docx` / `.pptx` / `.xlsx` / `.pdf` / `.txt` / images from the UI. Office formats are parsed with zip + XML (no extra dependencies); images go through a vision model first, so every model in the lineup gets the same text material. |
 | 🔍 | **Three-stage RAG** | Query rewrite → BM25 + FAISS dual recall → Cross-Encoder rerank, aimed at proper nouns that plain vector search misses |
 | ⚡ | **Parallel tool calls** | Ask "weather in Beijing, Shanghai and Xiamen" and three endpoints are hit concurrently via `ThreadPoolExecutor` |

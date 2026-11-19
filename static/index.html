@@ -326,6 +326,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 .attach-btn:hover { border-color: #c7d2fe; background: var(--primary-light); color: var(--primary); }
 .attach-btn.busy { opacity: .6; pointer-events: none; }
 .attach-chip {
+            flex-wrap: wrap;
     display: none; align-items: center; flex-wrap: wrap; gap: 8px;
     margin-bottom: 10px; padding: 8px 12px; border-radius: 10px;
     background: var(--primary-light); border: 1px solid #e0e7ff; font-size: 12.5px; color: #4338ca;
@@ -477,7 +478,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         <input type="checkbox" id="webSearchToggle" onchange="toggleWebSearch()"> 🌐 联网搜索
                     </label>
                     <button type="button" class="attach-btn" id="attachBtn" onclick="document.getElementById('fileInput').click()" title="上传文档或图片（PDF / Word / PPT / Excel / 图片），然后针对它提问">📎 文档/图片</button>
-                    <input type="file" id="fileInput" accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp" style="display:none" onchange="handleFileSelect(this)">
+                    <input type="file" id="fileInput" multiple accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp" style="display:none" onchange="handleFileSelect(this)">
                     <a class="attach-btn" href="/dashboard" target="_blank" rel="noopener" title="打开用量与成本仪表盘" style="text-decoration:none;">📊 用量</a>
                 </div>
                 <div class="attach-chip" id="attachChip" style="display:none;"></div>
@@ -931,15 +932,21 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         // 后一轮永远只往自己的容器里写，物理上不可能覆盖前一轮的 DOM。
         async function sendGroupMessage() {
             let text = userInput.value.trim();
-            if ((!text && !attachedDoc) || isGenerating || !groupConfig) return;
-            if (!text && attachedDoc) text = '请各位专家阅读这份文档，讨论其中的要点与潜在风险。';
+            if ((!text && !attachedDocs.length) || isGenerating || !groupConfig) return;
+            if (!text && attachedDocs.length) {
+                text = attachedDocs.length > 1
+                    ? '请各位专家对比这几份文档的异同，指出关键差异和潜在风险。'
+                    : '请各位专家阅读这份文档，讨论其中的要点与潜在风险。';
+            }
 
-            const docId = attachedDoc ? attachedDoc.doc_id : null;
-            const docLabel = attachedDoc ? '📎 ' + attachedDoc.filename + '\n' : '';
+            const docIds = attachedDocs.map(d => d.doc_id);
+            const docId = docIds[0] || null;
+            const docLabel = attachedDocs.length
+                ? attachedDocs.map(d => '📎 ' + d.filename).join('\n') + '\n'
+                : '';
 
             addMessage(docLabel + text, 'user');
             userInput.value = '';
-            clearAttachment();
             updateButtonState(true);
 
             currentAbortController = new AbortController();
@@ -1005,6 +1012,8 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         staff_models: groupConfig.staffs,
                         session_id: sessionId,
                         attachment_id: docId,
+                attachment_ids: docIds,
+                    attachment_ids: docIds,
                     }),
                     signal: currentAbortController.signal
                 });
@@ -1107,80 +1116,50 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             }
         }
 
-        // ==================== 附件（Word / PDF） ====================
-        let attachedDoc = null;
-
-        // 刷新页面后恢复上次的附件：文档解析结果存在服务端，doc_id 还是有效的
-        (function restoreAttachment() {
-            try {
-                const saved = localStorage.getItem('attached_doc');
-                if (!saved) return;
-                attachedDoc = JSON.parse(saved);
-                const chip = document.getElementById('attachChip');
-                if (!chip || !attachedDoc || !attachedDoc.doc_id) return;
-                chip.style.display = 'flex';
-                chip.innerHTML =
-                    '<span class="attach-name">📎 ' + escapeHtml(attachedDoc.filename) + '</span>' +
-                    '<span class="attach-meta">' + escapeHtml(attachedDoc.kind) + ' · ' + (attachedDoc.chars || 0).toLocaleString() + ' 字</span>' +
-                    '<button class="attach-remove" onclick="clearAttachment()" title="移除附件">✕</button>';
-            } catch (e) { attachedDoc = null; }
-        })();
+        // ==================== 附件（文档 / 图片，最多 3 份） ====================
+        const MAX_ATTACHMENTS = 3;
+        let attachedDocs = [];
         const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
         function escapeHtml(s) {
             return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
         }
 
-        function handleFileSelect(input) {
-            const file = input.files && input.files[0];
-            input.value = '';
-            if (!file) return;
+        function renderAttachments(pending) {
             const chip = document.getElementById('attachChip');
-            if (file.size > MAX_UPLOAD_BYTES) {
-                attachedDoc = null;
-                chip.style.display = 'flex';
-                chip.innerHTML = '<span class="attach-warn">⚠️ 文件超过 15MB</span><button class="attach-remove" onclick="clearAttachment()">✕</button>';
-                return;
-            }
-            const btn = document.getElementById('attachBtn');
-            btn.classList.add('busy');
+            if (!chip) return;
+            let html = attachedDocs.map((d, i) =>
+                '<span class="attach-item">' +
+                '<span class="attach-name">📎 ' + escapeHtml(d.filename) + '</span>' +
+                '<span class="attach-meta">' + escapeHtml(d.kind) + ' · ' + (d.chars || 0).toLocaleString() + ' 字</span>' +
+                (d.warning ? '<span class="attach-warn">⚠️ ' + escapeHtml(d.warning) + '</span>' : '') +
+                '<button class="attach-remove" onclick="removeAttachment(' + i + ')" title="移除">✕</button>' +
+                '</span>').join('');
+            if (pending) html += '<span class="attach-name">⏳ ' + escapeHtml(pending) + ' …</span>';
+            if (!html) { chip.style.display = 'none'; chip.innerHTML = ''; return; }
             chip.style.display = 'flex';
-            chip.innerHTML = '<span class="attach-name">⏳ 正在解析 ' + escapeHtml(file.name) + ' …</span>';
-
-            const reader = new FileReader();
-            reader.onload = async () => {
-                try {
-                    const res = await fetch('/upload', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-                        body: JSON.stringify({ filename: file.name, content_base64: reader.result, session_id: sessionId || ensureSessionId() })
-                    });
-                    const data = await res.json();
-                    if (!res.ok || data.code !== 200) throw new Error((data && data.message) || ('HTTP ' + res.status));
-                    attachedDoc = data.data;
-                    try { localStorage.setItem('attached_doc', JSON.stringify(attachedDoc)); } catch (e) {}
-                    chip.innerHTML =
-                        '<span class="attach-name">📎 ' + escapeHtml(attachedDoc.filename) + '</span>' +
-                        '<span class="attach-meta">' + escapeHtml(attachedDoc.kind) + ' · ' + attachedDoc.chars.toLocaleString() + ' 字</span>' +
-                        (attachedDoc.warning ? '<span class="attach-warn">⚠️ ' + escapeHtml(attachedDoc.warning) + '</span>' : '') +
-                        '<button class="attach-remove" onclick="clearAttachment()" title="移除附件">✕</button>';
-                } catch (e) {
-                    attachedDoc = null;
-                    chip.innerHTML = '<span class="attach-warn">⚠️ ' + escapeHtml(e.message || '上传失败') + '</span>' +
-                        '<button class="attach-remove" onclick="clearAttachment()">✕</button>';
-                } finally {
-                    btn.classList.remove('busy');
-                }
-            };
-            reader.onerror = () => {
-                attachedDoc = null;
-                btn.classList.remove('busy');
-                chip.innerHTML = '<span class="attach-warn">⚠️ 读取本地文件失败</span>';
-            };
-            reader.readAsDataURL(file);
+            chip.innerHTML = html;
         }
 
-        // 还没发过消息时也要有个 session_id，否则附件绑不到会话上
+        function saveAttachments() {
+            try { localStorage.setItem('attached_docs', JSON.stringify(attachedDocs)); } catch (e) {}
+        }
+
+        // 刷新页面后恢复附件：解析结果存在服务端，doc_id 还有效
+        (function restoreAttachments() {
+            try {
+                const saved = localStorage.getItem('attached_docs');
+                if (saved) attachedDocs = JSON.parse(saved) || [];
+                else {
+                    // 兼容旧版本单附件存储
+                    const one = localStorage.getItem('attached_doc');
+                    if (one) attachedDocs = [JSON.parse(one)];
+                }
+                attachedDocs = (attachedDocs || []).filter(d => d && d.doc_id).slice(0, MAX_ATTACHMENTS);
+                renderAttachments();
+            } catch (e) { attachedDocs = []; }
+        })();
+
         function ensureSessionId() {
             if (!sessionId) {
                 sessionId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('s-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
@@ -1189,18 +1168,79 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             return sessionId;
         }
 
-        function clearAttachment() {
-            if (sessionId) {
-                fetch('/upload/detach', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-                    body: JSON.stringify({ session_id: sessionId })
-                }).catch(() => {});
+        function uploadOne(file) {
+            return new Promise((resolve, reject) => {
+                if (file.size > MAX_UPLOAD_BYTES) return reject(new Error('文件超过 15MB'));
+                const reader = new FileReader();
+                reader.onload = async () => {
+                    try {
+                        const res = await fetch('/upload', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                            body: JSON.stringify({ filename: file.name, content_base64: reader.result, session_id: sessionId || ensureSessionId() })
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.code !== 200) throw new Error((data && data.message) || ('HTTP ' + res.status));
+                        resolve(data.data);
+                    } catch (e) { reject(e); }
+                };
+                reader.onerror = () => reject(new Error('读取本地文件失败'));
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function handleFileSelect(input) {
+            const files = Array.from(input.files || []);
+            input.value = '';
+            if (!files.length) return;
+            const btn = document.getElementById('attachBtn');
+            btn.classList.add('busy');
+            const errors = [];
+            for (const file of files) {
+                if (attachedDocs.length >= MAX_ATTACHMENTS) {
+                    errors.push('最多同时挂 ' + MAX_ATTACHMENTS + ' 份文件');
+                    break;
+                }
+                renderAttachments('正在解析 ' + file.name);
+                try {
+                    const doc = await uploadOne(file);
+                    attachedDocs.push(doc);
+                    saveAttachments();
+                } catch (e) {
+                    errors.push(file.name + '：' + (e.message || '上传失败'));
+                }
             }
-            try { localStorage.removeItem('attached_doc'); } catch (e) {}
-            attachedDoc = null;
+            renderAttachments();
+            btn.classList.remove('busy');
+            if (errors.length) {
+                const chip = document.getElementById('attachChip');
+                chip.style.display = 'flex';
+                chip.innerHTML += '<span class="attach-warn">⚠️ ' + escapeHtml(errors.join('；')) + '</span>';
+            }
+        }
+
+        function removeAttachment(index) {
+            attachedDocs.splice(index, 1);
+            saveAttachments();
+            renderAttachments();
+            if (!attachedDocs.length) detachSessionDocs();
+        }
+
+        function detachSessionDocs() {
+            if (!sessionId) return;
+            fetch('/upload/detach', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                body: JSON.stringify({ session_id: sessionId })
+            }).catch(() => {});
+        }
+
+        function clearAttachment() {
+            attachedDocs = [];
+            try { localStorage.removeItem('attached_docs'); localStorage.removeItem('attached_doc'); } catch (e) {}
             const chip = document.getElementById('attachChip');
             if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
+            detachSessionDocs();
         }
 
         const STEP_ICONS = { route: '🧭', memory: '🧠', tool: '⚙', llm: '⚡', fast: '⏱' };
@@ -1226,11 +1266,16 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 
         async function sendMessage() {
             let text = userInput.value.trim();
-            if ((!text && !attachedDoc) || isGenerating) return;
-            if (!text && attachedDoc) text = '请阅读这份文档，并总结其中的要点。';
+            if ((!text && !attachedDocs.length) || isGenerating) return;
+            if (!text && attachedDocs.length) {
+                text = attachedDocs.length > 1 ? '对比这几份文档，指出主要差异。' : '请阅读这份文档，并总结其中的要点。';
+            }
 
-            const docId = attachedDoc ? attachedDoc.doc_id : null;
-            const docLabel = attachedDoc ? '📎 ' + attachedDoc.filename + '\n' : '';
+            const docIds = attachedDocs.map(d => d.doc_id);
+            const docId = docIds[0] || null;
+            const docLabel = attachedDocs.length
+                ? attachedDocs.map(d => '📎 ' + d.filename).join('\n') + '\n'
+                : '';
 
             addMessage(docLabel + text, 'user');
             userInput.value = '';
@@ -1264,6 +1309,8 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                         message: text, session_id: sessionId,
                         user_api_key: reqApiKey, user_base_url: reqBaseUrl, user_model_name: reqModelName,
                         attachment_id: docId,
+                attachment_ids: docIds,
+                    attachment_ids: docIds,
                         enable_web_search: document.getElementById('webSearchToggle').checked
                     }),
                     signal: currentAbortController.signal
