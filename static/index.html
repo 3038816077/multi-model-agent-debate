@@ -546,7 +546,16 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         const inputWrapper = document.getElementById('inputWrapper');
         const modelSelectWrapper = document.getElementById('modelSelectWrapper');
 
-        const API_KEY = 'my-secret-key-123';
+        // 前端不持有任何密钥：服务端在打开页面时下发短期令牌（HttpOnly Cookie），
+        // 浏览器会自动带上它。页面上如果手动填了 key（命令行/调试场景）才额外发头。
+        let API_KEY = localStorage.getItem('api_key') || '';
+
+        // 只有手动配了 key 才额外发头；正常情况下凭服务端下发的 Cookie 鉴权
+        function authHeaders(base) {
+            const headers = Object.assign({}, base || {});
+            if (API_KEY) headers['X-API-Key'] = API_KEY;
+            return headers;
+        }
         // 默认选中的单模型（可用 localStorage 覆盖）
         const DEFAULT_MODEL_ID = 'glm-4-flash';
 
@@ -1005,7 +1014,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             try {
                 const response = await fetch('/chat/group_stream', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ 
                         message: text, 
                         chief_model: groupConfig.chief,
@@ -1176,7 +1185,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                     try {
                         const res = await fetch('/upload', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                            headers: authHeaders({ 'Content-Type': 'application/json' }),
                             body: JSON.stringify({ filename: file.name, content_base64: reader.result, session_id: sessionId || ensureSessionId() })
                         });
                         const data = await res.json();
@@ -1230,7 +1239,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             if (!sessionId) return;
             fetch('/upload/detach', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                headers: authHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ session_id: sessionId })
             }).catch(() => {});
         }
@@ -1304,7 +1313,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             try {
                 const response = await fetch('/chat/stream', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ 
                         message: text, session_id: sessionId,
                         user_api_key: reqApiKey, user_base_url: reqBaseUrl, user_model_name: reqModelName,
@@ -1455,7 +1464,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         
         async function loadSessionList() {
             try {
-                const res = await fetch('/sessions', { headers: { 'X-API-Key': API_KEY } });
+                const res = await fetch('/sessions', { headers: authHeaders() });
                 const data = await res.json();
                 sessionList.innerHTML = '';
                 if (data.code === 200) {
@@ -1532,7 +1541,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         async function loadHistory(id) {
             chatMessages.innerHTML = '<div class="message ai">正在加载历史记录...</div>';
             try {
-                const res = await fetch(`/sessions/${id}/messages`, { headers: { 'X-API-Key': API_KEY } });
+                const res = await fetch(`/sessions/${id}/messages`, { headers: authHeaders() });
                 const data = await res.json();
                 chatMessages.innerHTML = '';
                 if (data.code === 200 && data.data.length > 0) {
@@ -1569,7 +1578,7 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             const box = document.getElementById('healthResult');
             box.innerHTML = '正在检测（每个模型发一次最小请求，最多约 15 秒）...';
             try {
-                const res = await fetch('/models/health', { headers: { 'X-API-Key': API_KEY } });
+                const res = await fetch('/models/health', { headers: authHeaders() });
                 const data = await res.json();
                 if (data.code !== 200 || !Array.isArray(data.data)) { box.textContent = '检测失败'; return; }
                 box.innerHTML = data.data.map(m => {

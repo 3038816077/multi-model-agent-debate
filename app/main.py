@@ -7,7 +7,7 @@ os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from slowapi.errors import RateLimitExceeded
 
 from app.api.chat import router as chat_router
@@ -36,7 +36,13 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # 6. 注册中间件与路由
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware,
+    # 带 Cookie 的跨域必须指明来源，不能用 *，否则浏览器会拒绝
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_origin_regex=r"http://(127\.0\.0\.1|localhost)(:\d+)?",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 app.include_router(chat_router)
 app.include_router(upload_router)
@@ -69,11 +75,38 @@ def startup_event():
 
     init_knowledge_base(BASE_DIR)
 
+def _with_token(response):
+    """给页面响应挂一个短期令牌 Cookie，前端代码里就不需要任何密钥。"""
+    from app.middleware.auth import TOKEN_COOKIE, TOKEN_TTL, issue_token
+
+    response.set_cookie(
+        key=TOKEN_COOKIE,
+        value=issue_token(),
+        max_age=TOKEN_TTL,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return _with_token(FileResponse(os.path.join(STATIC_DIR, "index.html")))
+
+
+@app.post("/session/token", include_in_schema=False)
+def session_token():
+    """给命令行/脚本换一个短期令牌（浏览器走 Cookie，不需要调这个）。"""
+    from app.middleware.auth import TOKEN_COOKIE, TOKEN_TTL, issue_token
+
+    token = issue_token()
+    response = JSONResponse({"code": 200, "data": {"token": token, "expires_in": TOKEN_TTL}})
+    response.set_cookie(key=TOKEN_COOKIE, value=token, max_age=TOKEN_TTL,
+                        httponly=True, samesite="strict", path="/")
+    return response
 
 @app.get("/dashboard", include_in_schema=False)
 def dashboard():
     """用量仪表盘：token / 成本 / 延迟的独立页面。"""
-    return FileResponse(os.path.join(STATIC_DIR, "dashboard.html"))
+    return _with_token(FileResponse(os.path.join(STATIC_DIR, "dashboard.html")))

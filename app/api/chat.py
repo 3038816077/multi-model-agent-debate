@@ -1567,7 +1567,7 @@ def usage_stats(days: int = 14, recent: int = 20, auth: bool = Depends(verify_ap
     }
 
 @router.get("/sessions", summary="获取所有会话列表")
-def get_sessions(db: Session = Depends(get_db)):
+def get_sessions(db: Session = Depends(get_db), auth: bool = Depends(verify_api_key)):
     from app.db.models import DBSession, DBMessage
     sessions = db.query(DBSession).order_by(DBSession.updated_at.desc()).all()
     result = []
@@ -1581,7 +1581,7 @@ def get_sessions(db: Session = Depends(get_db)):
     return {"code": 200, "data": result}
 
 @router.get("/sessions/{session_id}/messages", summary="获取指定会话的历史消息")
-def get_session_messages(session_id: str, db: Session = Depends(get_db)):
+def get_session_messages(session_id: str, db: Session = Depends(get_db), auth: bool = Depends(verify_api_key)):
     from app.db.models import DBMessage
     msgs = db.query(DBMessage).filter(DBMessage.session_id == session_id, DBMessage.role.in_(["user", "assistant"])).order_by(DBMessage.created_at.asc()).all()
     return {"code": 200, "data": [{"role": m.role, "content": m.content, "thought_process": m.thought_process or ""} for m in msgs]}

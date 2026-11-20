@@ -98,7 +98,14 @@
     </div>
 
 <script>
-    const API_KEY = localStorage.getItem("api_key") || "my-secret-key-123";
+    let API_KEY = localStorage.getItem("api_key") || "";
+
+        // 只有手动配了 key 才额外发头；正常情况下凭服务端下发的 Cookie 鉴权
+        function authHeaders(base) {
+            const headers = Object.assign({}, base || {});
+            if (API_KEY) headers['X-API-Key'] = API_KEY;
+            return headers;
+        }
     let days = 14;
     let labels = {};
 
@@ -139,7 +146,7 @@
 
     async function loadLabels() {
         try {
-            const r = await fetch("/models", { headers: { "X-API-Key": API_KEY } });
+            const r = await fetch("/models", { headers: authHeaders(), credentials: 'same-origin' });
             const j = await r.json();
             const list = Array.isArray(j) ? j : (j.data || []);
             list.forEach(m => {
@@ -220,7 +227,7 @@
     async function load() {
         document.getElementById("meta").textContent = "加载中…";
         try {
-            const r = await fetch("/usage/stats?days=" + days + "&recent=20", { headers: { "X-API-Key": API_KEY } });
+            const r = await fetch("/usage/stats?days=" + days + "&recent=20", { headers: authHeaders(), credentials: 'same-origin' });
             const payload = await r.json();
             if (!payload || payload.code !== 200) throw new Error((payload && payload.message) || "接口返回异常");
             const d = payload.data || {};
