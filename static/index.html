@@ -92,6 +92,35 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
 }
 .session-item > span:last-child { color: var(--muted-2) !important; font-size: 10.5px !important; }
 
+.session-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 14px 6px; font-size: 11.5px; color: var(--muted-2);
+}
+.mini-btn {
+    border: 1px solid #e5e7eb; background: #fff; color: var(--ink-2);
+    border-radius: 8px; padding: 3px 9px; font-size: 11.5px; cursor: pointer; margin-left: 6px;
+}
+.mini-btn:hover { border-color: #c7d2fe; color: var(--primary); }
+.mini-btn.danger:hover { border-color: #fecaca; color: #dc2626; background: #fef2f2; }
+.batch-bar {
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    padding: 6px 12px; margin: 0 6px 4px; background: #eef2ff; border-radius: 10px;
+    font-size: 11.5px; color: var(--ink-2);
+}
+.batch-all { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.batch-count { color: var(--primary); font-weight: 600; margin-right: auto; }
+.session-check { margin-right: 6px; flex-shrink: 0; }
+.session-item.selected { background: #e0e7ff; }
+.archived-wrap { border-top: 1px solid #f1f2f6; margin: 4px 8px 8px; }
+.archived-toggle {
+    width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+    padding: 8px 6px; font-size: 11.5px; color: var(--muted-2);
+    display: flex; justify-content: space-between;
+}
+.archived-toggle:hover { color: var(--primary); }
+.archived-list { max-height: 180px; padding: 4px 0; }
+.session-item.archived-item { opacity: .75; }
+
 /* ---------- 主区 ---------- */
 .chat-container { flex: 1; min-width: 0; background: var(--surface); display: flex; flex-direction: column; overflow: hidden; position: relative; }
 .chat-header {
@@ -419,7 +448,24 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 <button class="new-chat-btn" onclick="createNewChat()">＋ 新对话（普通）</button>
                 <button class="new-chat-btn secondary" onclick="createGroupChat()">🧠 并行对话（多模型）</button>
             </div>
+            <div class="session-toolbar" id="sessionToolbar">
+                <span class="session-count" id="sessionCount">…</span>
+                <button class="mini-btn" id="manageBtn" onclick="toggleManage()">管理</button>
+            </div>
+            <div class="batch-bar" id="batchBar" style="display:none;">
+                <label class="batch-all"><input type="checkbox" id="selectAllBox" onchange="toggleSelectAll(this)"> 全选</label>
+                <span class="batch-count" id="batchCount">已选 0</span>
+                <button class="mini-btn" onclick="archiveSelected(true)">归档</button>
+                <button class="mini-btn danger" onclick="deleteSelected()">删除</button>
+                <button class="mini-btn" onclick="toggleManage()">完成</button>
+            </div>
             <div class="session-list" id="sessionList"></div>
+            <div class="archived-wrap" id="archivedWrap" style="display:none;">
+                <button class="archived-toggle" onclick="toggleArchivedList()">
+                    <span id="archivedToggleText">已归档 (0)</span><span id="archivedArrow">▸</span>
+                </button>
+                <div class="session-list archived-list" id="archivedList" style="display:none;"></div>
+            </div>
         </div>
 
         <div class="chat-container">
@@ -1462,24 +1508,160 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
         
+        // ==================== 会话管理（多选 / 归档 / 删除）====================
+        let manageMode = false;
+        let selectedSessions = new Set();
+        let archivedOpen = false;
+        let sessionCache = { active: [], archived: [] };
+
+        function toggleManage() {
+            manageMode = !manageMode;
+            selectedSessions.clear();
+            const btn = document.getElementById('manageBtn');
+            if (btn) btn.textContent = manageMode ? '取消' : '管理';
+            const bar = document.getElementById('batchBar');
+            if (bar) bar.style.display = manageMode ? 'flex' : 'none';
+            renderSessionList();
+        }
+
+        function toggleSelectAll(box) {
+            if (box.checked) sessionCache.active.forEach(s => selectedSessions.add(s.session_id));
+            else selectedSessions.clear();
+            renderSessionList();
+        }
+
+        function toggleSessionSelect(id, checked) {
+            if (checked) selectedSessions.add(id);
+            else selectedSessions.delete(id);
+            renderSessionList();
+        }
+
+        async function archiveSelected(archived) {
+            const ids = Array.from(selectedSessions);
+            if (!ids.length) return;
+            try {
+                await fetch('/sessions/archive', {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ session_ids: ids, archived: archived })
+                });
+                selectedSessions.clear();
+                toggleManage();
+                await loadSessionList();
+            } catch (e) { alert('归档失败：' + (e.message || e)); }
+        }
+
+        async function deleteSelected() {
+            const ids = Array.from(selectedSessions);
+            if (!ids.length) return;
+            if (!confirm('将永久删除 ' + ids.length + ' 个会话及其全部消息，删除后无法恢复。\n\n确定继续吗？')) return;
+            try {
+                const res = await fetch('/sessions/delete', {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ session_ids: ids })
+                });
+                const data = await res.json();
+                if (data.code !== 200) throw new Error(data.message || '删除失败');
+                // 当前正在看的会话被删掉时，回到新对话
+                if (sessionId && ids.includes(sessionId)) createNewChat();
+                selectedSessions.clear();
+                toggleManage();
+                await loadSessionList();
+            } catch (e) { alert('删除失败：' + (e.message || e)); }
+        }
+
+        function toggleArchivedList() {
+            archivedOpen = !archivedOpen;
+            const list = document.getElementById('archivedList');
+            const arrow = document.getElementById('archivedArrow');
+            if (list) list.style.display = archivedOpen ? 'flex' : 'none';
+            if (arrow) arrow.textContent = archivedOpen ? '▾' : '▸';
+        }
+
+        function sessionItemHtml(s, opts) {
+            const isGrp = !!localStorage.getItem('group_cfg_' + s.session_id);
+            const icon = isGrp ? '🧠' : '💬';
+            const checked = selectedSessions.has(s.session_id) ? ' checked' : '';
+            const checkbox = (opts && opts.checkable)
+                ? '<input type="checkbox" class="session-check"' + checked +
+                  ' onclick="event.stopPropagation(); toggleSessionSelect(\'' + s.session_id + '\', this.checked)">'
+                : '';
+            return checkbox + '<span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; margin-right:8px;">' +
+                   icon + ' ' + escapeHtml(s.title || '新会话') + '</span>' +
+                   '<span style="font-size:11px; color:#9ca3af; flex-shrink:0;">' + escapeHtml(s.updated_at || '') + '</span>';
+        }
+
+        function renderSessionList() {
+            const list = document.getElementById('sessionList');
+            const archivedList = document.getElementById('archivedList');
+            const wrap = document.getElementById('archivedWrap');
+            if (!list) return;
+
+            const active = sessionCache.active || [];
+            const archived = sessionCache.archived || [];
+
+            list.innerHTML = '';
+            active.forEach(s => {
+                const div = document.createElement('div');
+                div.className = 'session-item' + (s.session_id === sessionId ? ' active' : '') +
+                                (selectedSessions.has(s.session_id) ? ' selected' : '');
+                div.innerHTML = sessionItemHtml(s, { checkable: manageMode });
+                div.onclick = () => { if (manageMode) toggleSessionSelect(s.session_id, !selectedSessions.has(s.session_id)); else switchSession(s.session_id); };
+                list.appendChild(div);
+            });
+            if (!active.length) {
+                list.innerHTML = '<div style="padding:14px;color:#9ca3af;font-size:12px;text-align:center;">还没有会话</div>';
+            }
+
+            const count = document.getElementById('sessionCount');
+            if (count) count.textContent = active.length + ' 个会话';
+            const batchCount = document.getElementById('batchCount');
+            if (batchCount) batchCount.textContent = '已选 ' + selectedSessions.size;
+            const allBox = document.getElementById('selectAllBox');
+            if (allBox) allBox.checked = active.length > 0 && selectedSessions.size === active.length;
+
+            if (wrap && archivedList) {
+                wrap.style.display = archived.length ? 'block' : 'none';
+                const text = document.getElementById('archivedToggleText');
+                if (text) text.textContent = '已归档 (' + archived.length + ')';
+                archivedList.innerHTML = '';
+                archived.forEach(s => {
+                    const div = document.createElement('div');
+                    div.className = 'session-item archived-item';
+                    div.innerHTML = sessionItemHtml(s, { checkable: false }) +
+                        '<button class="mini-btn" style="margin-left:6px;" onclick="event.stopPropagation(); unarchiveOne(\'' + s.session_id + '\')">恢复</button>';
+                    div.onclick = () => switchSession(s.session_id);
+                    archivedList.appendChild(div);
+                });
+            }
+        }
+
+        async function unarchiveOne(id) {
+            try {
+                await fetch('/sessions/archive', {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ session_ids: [id], archived: false })
+                });
+                await loadSessionList();
+            } catch (e) { alert('恢复失败：' + (e.message || e)); }
+        }
+
         async function loadSessionList() {
             try {
                 const res = await fetch('/sessions', { headers: authHeaders() });
                 const data = await res.json();
-                sessionList.innerHTML = '';
                 if (data.code === 200) {
-                    data.data.forEach(s => {
-                        const div = document.createElement('div');
-                        const isGrp = !!localStorage.getItem('group_cfg_' + s.session_id);
-                        div.className = `session-item ${s.session_id === sessionId ? 'active' : ''}`;
-                        div.innerHTML = `<span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; margin-right: 8px;">${isGrp ? '🧠' : '💬'} ${s.title || '新会话'}</span><span style="font-size: 11px; color: #9ca3af; flex-shrink: 0;">${s.updated_at}</span>`;
-                        div.onclick = () => switchSession(s.session_id);
-                        sessionList.appendChild(div);
-                    });
+                    sessionCache = { active: data.data.active || [], archived: data.data.archived || [] };
+                    // 选中的会话如果被删了，清理掉
+                    const alive = new Set(sessionCache.active.map(s => s.session_id).concat(sessionCache.archived.map(s => s.session_id)));
+                    Array.from(selectedSessions).forEach(id => { if (!alive.has(id)) selectedSessions.delete(id); });
+                    renderSessionList();
                 }
             } catch (e) { console.error('加载列表失败', e); }
         }
-        
+
         async function switchSession(id) {
             if (isGenerating) return;
             sessionId = id;

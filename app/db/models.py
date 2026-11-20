@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime
+from sqlalchemy import Column, String, Text, DateTime, Integer
 from datetime import datetime
 from app.db.database import Base
 
@@ -7,6 +7,8 @@ class DBSession(Base):
     
     session_id = Column(String, primary_key=True, index=True)
     long_term_memory = Column(Text, default="")
+    # 0=正常 1=已归档；用整数而不是布尔，SQLite 里更省事
+    archived = Column(Integer, default=0, index=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 

@@ -89,6 +89,12 @@ def startup_event():
     except Exception as e:
         logger.warning(f"启动自检异常（不影响服务启动）：{e}")
 
+    from app.db.database import ensure_schema
+
+    applied = ensure_schema()
+    if applied:
+        logger.info(f"[迁移] 已应用：{applied}")
+
     init_knowledge_base(BASE_DIR)
 
 

@@ -32,3 +32,25 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+def ensure_schema() -> list:
+    """轻量迁移：给已存在的库补上新增列。
+
+    项目没有引入 Alembic（单机 SQLite，迁移脚本比依赖更省心），
+    但也不能指望用户删库重来，所以用 PRAGMA 检查后 ALTER TABLE。
+    返回本次实际执行的 SQL，便于启动日志里看到发生了什么。
+    """
+    from sqlalchemy import inspect, text
+
+    applied = []
+    inspector = inspect(engine)
+    if "sessions" not in inspector.get_table_names():
+        Base.metadata.create_all(bind=engine)
+        return ["create_all"]
+
+    columns = {c["name"] for c in inspector.get_columns("sessions")}
+    if "archived" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN archived INTEGER DEFAULT 0"))
+        applied.append("ALTER TABLE sessions ADD COLUMN archived")
+    return applied

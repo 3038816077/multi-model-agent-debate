@@ -1548,18 +1548,38 @@ def usage_stats(days: int = 14, recent: int = 20, auth: bool = Depends(verify_ap
         },
     }
 
-@router.get("/sessions", summary="获取所有会话列表")
-def get_sessions(db: Session = Depends(get_db), auth: bool = Depends(verify_api_key)):
-    from app.db.models import DBSession, DBMessage
-    sessions = db.query(DBSession).order_by(DBSession.updated_at.desc()).all()
-    result = []
-    for s in sessions:
-        first_msg = db.query(DBMessage).filter(DBMessage.session_id == s.session_id, DBMessage.role == "user").order_by(DBMessage.created_at.asc()).first()
-        title = "新会话"
-        if first_msg and first_msg.content:
-            content_clean = first_msg.content.strip().replace("\n", " ")
-            title = content_clean[:15] + ("..." if len(content_clean) > 15 else "")
-        result.append({"session_id": s.session_id, "updated_at": s.updated_at.strftime("%m-%d %H:%M"), "title": title})
+class SessionBatchRequest(BaseModel):
+    session_ids: List[str]
+    archived: Optional[bool] = True
+
+
+@router.get("/sessions", summary="获取会话列表（含归档分区）")
+def get_sessions(include_archived: int = 1, db: Session = Depends(get_db),
+                 auth: bool = Depends(verify_api_key)):
+    from app.db.session_ops import list_sessions
+
+    data = list_sessions(db, include_archived=bool(include_archived))
+    return {"code": 200, "data": data}
+
+
+@router.post("/sessions/delete", summary="永久删除会话（批量）")
+def delete_sessions(body: SessionBatchRequest, db: Session = Depends(get_db),
+                    auth: bool = Depends(verify_api_key)):
+    """删除后不可恢复：会话、消息一起清掉。"""
+    from app.db.session_ops import delete_sessions as _delete
+
+    result = _delete(db, body.session_ids)
+    logger.info(f"【会话】永久删除 {result['deleted_sessions']} 个会话、{result['deleted_messages']} 条消息")
+    return {"code": 200, "data": result}
+
+
+@router.post("/sessions/archive", summary="归档 / 取消归档（批量）")
+def archive_sessions(body: SessionBatchRequest, db: Session = Depends(get_db),
+                     auth: bool = Depends(verify_api_key)):
+    from app.db.session_ops import set_archived
+
+    result = set_archived(db, body.session_ids, bool(body.archived))
+    logger.info(f"【会话】{'归档' if body.archived else '取消归档'} {result['updated']} 个")
     return {"code": 200, "data": result}
 
 @router.get("/sessions/{session_id}/messages", summary="获取指定会话的历史消息")
