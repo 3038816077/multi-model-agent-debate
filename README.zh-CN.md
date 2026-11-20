@@ -359,7 +359,7 @@ python scripts/benchmark_route.py --base http://127.0.0.1:8000
 | `llm_calls_total{model,scene}` | counter | 模型调用次数（chat / group / divergence） |
 | `llm_tokens_total{model}` | counter | 累计 token |
 
-启动监控栈：
+启动监控栈（已实测：Prometheus `up=1`，抓到 `http_requests_total`；Grafana 13.3.1 就绪）：
 
 ```bash
 docker compose -f docker-compose.monitoring.yml up -d
