@@ -163,24 +163,6 @@ def _documents_message(doc_ids: list):
 def _document_message(doc_id: str):
     """单文档版本（保留旧接口）。"""
     return _documents_message([doc_id])
-    text = doc.get("text", "")
-    truncated = len(text) > MAX_DOC_CHARS_IN_PROMPT
-    if truncated:
-        text = text[:MAX_DOC_CHARS_IN_PROMPT]
-    tail = (f"\n\n（文档较长，以上只截取了前 {MAX_DOC_CHARS_IN_PROMPT} 字；"
-            "如果用户问的内容不在这里，请明确告诉用户文档被截断了）") if truncated else ""
-    return {
-        "role": "system",
-        "content": (
-            f"【用户上传的文档：{doc['filename']}（{doc.get('kind','文档')}，共 {doc.get('chars', len(text))} 字）】\n"
-            f"{text}{tail}\n"
-            "【文档结束】\n"
-            "请优先依据以上文档内容回答。文档里的数字、结论、事实不要编造；"
-            "但评价、修改建议、方案设计这类问题，可以基于内容给出你自己的判断，并注明是你的建议。"
-            "确实没提到的具体信息，要说明“文档中未提及”。"
-        ),
-    }
-
 router = APIRouter()
 
 class ChatRequest(BaseModel):
