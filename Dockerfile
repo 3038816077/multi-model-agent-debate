@@ -22,6 +22,10 @@ RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple \
 # 复制项目代码
 COPY . .
 
+# 构建期就验证依赖装得全：import 失败会立刻让镜像构建失败，
+# 而不是等容器跑起来才在日志里看到 ImportError
+RUN python -c "import app.main; print('app import OK')"
+
 EXPOSE 8000
 
 CMD ["python", "run.py"]

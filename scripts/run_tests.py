@@ -17,6 +17,12 @@ import traceback
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS = os.path.join(ROOT, "tests")
+sys.path.insert(0, TESTS)
+
+# 单元测试不需要模型运行时，先装替身再导入被测模块
+from _stubs import install as _install_stubs  # noqa: E402
+
+_install_stubs()
 
 
 def load_module(path):
