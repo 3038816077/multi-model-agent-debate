@@ -57,6 +57,23 @@ def check_files():
         ok("关键文件齐全")
 
 
+def _parse_env(path: str) -> dict:
+    """手写解析 .env：部署机上往往还没装 python-dotenv。"""
+    values = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                value = value.strip().strip('"').strip("'")
+                values[key.strip()] = value
+    except OSError:
+        pass
+    return values
+
+
 def check_dotenv():
     env_path = os.path.join(ROOT, ".env")
     if not os.path.exists(env_path):
@@ -66,9 +83,7 @@ def check_dotenv():
             fail(".env 和 env.txt 都不存在")
         return
 
-    from dotenv import dotenv_values
-
-    values = dotenv_values(env_path)
+    values = _parse_env(env_path)
     empty = [k for k, v in values.items() if k and not (v or "").strip()]
     if empty:
         warn("这些变量值为空：%s" % ", ".join(empty[:6]))
@@ -93,7 +108,7 @@ def check_registry():
         from app.core.router import MODEL_PRICE_PER_M, MODEL_TIERS
         from app.core.selfcheck import check_registry, check_tiers, check_prices, has_fatal
     except Exception as e:
-        fail("导入配置失败（依赖没装全？）：%s" % e)
+        warn("本机没装 Python 依赖，跳过注册表检查（用 Docker 部署不需要）：%s" % str(e)[:60])
         return
 
     registry = get_model_registry()
@@ -126,9 +141,14 @@ def check_dirs():
 
 
 def check_port():
-    from app.core.config import SERVER_PORT
-
-    port = int(os.getenv("SERVER_PORT", SERVER_PORT) or 8000)
+    # 不 import app.core.config：部署机上往往还没有依赖
+    values = _parse_env(os.path.join(ROOT, ".env"))
+    raw = values.get("SERVER_PORT") or os.getenv("SERVER_PORT") or "8000"
+    try:
+        port = int(raw)
+    except ValueError:
+        warn("SERVER_PORT 不是数字：%s，按 8000 处理" % raw)
+        port = 8000
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
