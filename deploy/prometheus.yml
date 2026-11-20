@@ -1,0 +1,13 @@
+# Prometheus 抓取配置：每 15 秒拉一次应用的 /metrics
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: multi-model-agent
+    metrics_path: /metrics
+    static_configs:
+      # 容器内访问宿主机上的应用；如果应用也在 compose 里，改成服务名:端口
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          env: local

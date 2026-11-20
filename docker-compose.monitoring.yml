@@ -1,0 +1,39 @@
+# 监控栈：Prometheus 抓指标 + Grafana 看图
+#
+#   docker compose -f docker-compose.monitoring.yml up -d
+#   Prometheus  http://localhost:9090
+#   Grafana     http://localhost:3000  (admin / admin)
+#
+# Grafana 里加数据源 Prometheus -> http://prometheus:9090，然后导入下面的查询：
+#   rate(http_requests_total[1m])
+#   histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+#   rate(llm_calls_total[5m])
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mma-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mma-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  grafana-data:

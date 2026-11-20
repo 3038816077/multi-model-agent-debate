@@ -348,6 +348,36 @@ python scripts/benchmark_route.py --base http://127.0.0.1:8000
 
 价格表在 [`app/core/router.py`](app/core/router.py) 的 `MODEL_PRICE_PER_M`，按自己的实际账单改。
 
+## 📊 监控（Prometheus）
+
+`GET /metrics` 按 Prometheus 文本格式暴露指标（零依赖实现，不引 prometheus_client）：
+
+| 指标 | 类型 | 说明 |
+| --- | --- | --- |
+| `http_requests_total{path,status}` | counter | 请求数，path 已归一化（`/sessions/{id}`） |
+| `http_request_duration_seconds{path}` | histogram | 延迟分布，桶 10ms~10s |
+| `llm_calls_total{model,scene}` | counter | 模型调用次数（chat / group / divergence） |
+| `llm_tokens_total{model}` | counter | 累计 token |
+
+启动监控栈：
+
+```bash
+docker compose -f docker-compose.monitoring.yml up -d
+# Prometheus  http://localhost:9090
+# Grafana     http://localhost:3000   (admin/admin)
+```
+
+Grafana 里加数据源 `http://prometheus:9090`，常用查询：
+
+```promql
+rate(http_requests_total[1m])                                              # QPS
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))   # p95
+rate(llm_calls_total[5m])                                                  # 模型调用速率
+```
+
+> `/metrics` 不带鉴权（Prometheus 抓取端通常在内网）。如果部署到公网，
+> 请用 Nginx 限制来源 IP 或加 Basic Auth。
+
 ## 📈 性能基线
 
 单进程 + SQLite 的实测数字（详见 [docs/负载测试.md](docs/负载测试.md)，限流关闭，压测端同机）：

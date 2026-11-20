@@ -49,6 +49,31 @@ app.include_router(chat_router)
 app.include_router(upload_router)
 app.include_router(health_router)
 
+# 6.5 指标收集中间件（放在路由注册之后、静态挂载之前）
+@app.middleware("http")
+async def _metrics_middleware(request, call_next):
+    import time as _time
+
+    from app.core.metrics import record_http
+
+    started = _time.perf_counter()
+    response = await call_next(request)
+    # /metrics 自己不计入，否则每次抓取都会污染统计
+    if request.url.path != "/metrics":
+        record_http(request.url.path, response.status_code, _time.perf_counter() - started)
+    return response
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint():
+    """Prometheus 抓取端点（文本暴露格式）。"""
+    from fastapi.responses import PlainTextResponse
+
+    from app.core.metrics import render_metrics
+
+    return PlainTextResponse(render_metrics())
+
+
 # 7. 挂载静态文件
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

@@ -79,6 +79,17 @@ def llm_node(state: State):
             completion_tokens=getattr(_usage, "completion_tokens", 0) or 0,
             latency_ms=int((time.time() - _t0) * 1000),
         )
+        try:
+            from app.core.metrics import record_llm
+
+            record_llm(
+                get_model_name(),
+                "chat",
+                (getattr(_usage, "prompt_tokens", 0) or 0)
+                + (getattr(_usage, "completion_tokens", 0) or 0),
+            )
+        except Exception:
+            pass
 
     msg = resp.choices[0].message
     logger.info(f"[LLM返回] 内容: {msg.content}, 工具调用: {msg.tool_calls}")
