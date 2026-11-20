@@ -13,7 +13,7 @@ SQLALCHEMY_DATABASE_URL = "sqlite:///./data/agent.db"
 # 👇 timeout=15 是为了在并发极高、发生锁等待时，给予足够的排队时间，避免直接报错
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
-    connect_args={"check_same_thread": False, "timeout": 15}
+    connect_args={"check_same_thread": False, "timeout": 30}
 )
 
 # 👇 核心：监听每次建立连接的事件，强制执行 WAL 模式等 PRAGMA 命令
@@ -24,6 +24,9 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.execute("PRAGMA journal_mode=WAL;")
     # 将同步模式设为 NORMAL，在保证数据安全的前提下提升写入性能
     cursor.execute("PRAGMA synchronous=NORMAL;")
+    # 多个连接抢写时最多排队 15 秒再报错，而不是立刻 "database is locked"
+    cursor.execute("PRAGMA busy_timeout=15000;")
+    cursor.execute("PRAGMA foreign_keys=ON;")
     cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

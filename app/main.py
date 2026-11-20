@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from slowapi.errors import RateLimitExceeded
 
+from app.core.logger import logger
 from app.api.chat import router as chat_router
 from app.api.upload import router as upload_router
 from app.api.health import router as health_router
@@ -52,8 +53,23 @@ app.include_router(health_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # 8. 注册启动事件
+_instance_lock = None
+
+
 @app.on_event("startup")
 def startup_event():
+    # 单实例锁：两个进程同时打开同一个 SQLite 会互相锁死
+    global _instance_lock
+    from app.core.instance_lock import InstanceLock
+
+    _instance_lock = InstanceLock(os.path.join(BASE_DIR, "data", "agent.lock"))
+    if not _instance_lock.acquire():
+        logger.error(
+            "另一个实例正在使用同一个 data 目录（data/agent.lock 被占用）。\n"
+            "两个进程同时打开 SQLite 会互相锁死，表现为 “database is locked”。\n"
+            "请先停掉已有实例，或换一个工作目录。"
+        )
+        raise RuntimeError("检测到重复启动：请先停止已运行的实例")
     # 启动自检：配置类问题在这里说清楚，别等用户点发送才 500
     try:
         from app.core.selfcheck import validate_startup, has_fatal
@@ -74,6 +90,14 @@ def startup_event():
         logger.warning(f"启动自检异常（不影响服务启动）：{e}")
 
     init_knowledge_base(BASE_DIR)
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    global _instance_lock
+    if _instance_lock:
+        _instance_lock.release()
+        _instance_lock = None
 
 def _with_token(response):
     """给页面响应挂一个短期令牌 Cookie，前端代码里就不需要任何密钥。"""
