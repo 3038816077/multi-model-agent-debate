@@ -8,9 +8,11 @@
 
 一套开箱即用的**多模型并行 Agent**：跨厂商专家并行作答 · 共识/分歧报告 · Hybrid RAG 检索（BM25 + FAISS + 精排）· Word / PDF 直接问答 · SSE 流式输出 · 多会话持久化
 
+[![CI](https://github.com/3038816077/multi-model-agent-debate/actions/workflows/ci.yml/badge.svg)](https://github.com/3038816077/multi-model-agent-debate/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-1c3c3c)
+![tests](https://img.shields.io/badge/tests-60%20passed-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
 

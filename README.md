@@ -6,6 +6,7 @@
 
 <sub>A ready-to-run multi-model agent: parallel experts across vendors · consensus / conflict reporting · Hybrid RAG (BM25 + FAISS + reranking) · direct Word / PDF Q&A · SSE streaming · persistent sessions</sub>
 
+[![CI](https://github.com/3038816077/multi-model-agent-debate/actions/workflows/ci.yml/badge.svg)](https://github.com/3038816077/multi-model-agent-debate/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-1c3c3c)
