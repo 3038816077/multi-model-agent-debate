@@ -114,8 +114,14 @@ def check_prices(prices: Mapping, registry: Optional[Mapping]) -> list:
 
 
 def check_writable(paths: Iterable[str]) -> list:
-    """启动时确认关键目录可写，避免第一次上传/写日志才失败。"""
+    """启动时确认关键目录可写，避免第一次上传/写日志才失败。
+
+    探针文件名必须唯一：/health 会被并发调用，固定名字（.write_probe）会让
+    两个请求互相删掉对方的文件，误报「目录不可写」。压测时实测过：并发 10 下
+    80% 的健康检查返回 503，全是这个原因。
+    """
     import os
+    import tempfile
 
     problems = []
     for path in paths:
@@ -123,10 +129,12 @@ def check_writable(paths: Iterable[str]) -> list:
             continue
         try:
             os.makedirs(path, exist_ok=True)
-            probe = os.path.join(path, ".write_probe")
-            with open(probe, "w", encoding="utf-8") as f:
-                f.write("ok")
-            os.remove(probe)
+            handle = tempfile.NamedTemporaryFile(dir=path, prefix=".write_probe_", delete=True)
+            try:
+                handle.write(b"ok")
+                handle.flush()
+            finally:
+                handle.close()
         except Exception as e:
             problems.append({
                 "level": "fatal", "code": "dir_not_writable",

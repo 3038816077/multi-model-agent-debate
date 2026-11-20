@@ -348,6 +348,41 @@ python scripts/benchmark_route.py --base http://127.0.0.1:8000
 
 价格表在 [`app/core/router.py`](app/core/router.py) 的 `MODEL_PRICE_PER_M`，按自己的实际账单改。
 
+## 📈 性能基线
+
+单进程 + SQLite 的实测数字（详见 [docs/负载测试.md](docs/负载测试.md)，限流关闭，压测端同机）：
+
+| 接口 | 并发 50 时 | 说明 |
+| --- | --- | --- |
+| `GET /models` | p95 49ms · 1658 RPS | 纯内存 |
+| `GET /health` | p95 55ms · 1154 RPS | 含目录写探针 |
+| `GET /sessions` | p95 160ms · 530 RPS | 两次查询 + 标题聚合 |
+| `POST /sessions/archive` | p99 343ms | SQLite 写串行，属预期 |
+
+**真实对话的瓶颈在上游模型（10~60s），不在服务本身**——上表只反映服务开销。
+
+> 压测还抓到一个并发 bug：`/health` 在并发下错误率 80%，因为探针文件用了固定文件名，
+> 两个请求互相删掉对方的文件。改成唯一临时文件名后归零。
+
+## 🔐 鉴权
+
+前端**不持有任何密钥**：打开页面时服务端下发随机令牌（HttpOnly Cookie，SameSite=Strict），
+浏览器自动携带；命令行可用 `POST /session/token` 换短期令牌，或继续用 `X-API-Key`。
+
+```bash
+TOKEN=$(curl -s -X POST localhost:8000/session/token | python -c "import sys,json;print(json.load(sys.stdin)['data']['token'])")
+curl -H "Authorization: Bearer $TOKEN" localhost:8000/sessions
+```
+
+## 🗄️ 数据库与运维
+
+- **单实例保护**：启动时对 `data/agent.lock` 加操作系统排他锁（进程退出自动释放）。
+  同一个 data 目录起第二个实例会直接报错退出——两个进程同时打开 SQLite 会互相锁死，
+  表现为 `database is locked`。
+- **并发参数**：`journal_mode=WAL` / `synchronous=NORMAL` / `busy_timeout=15000` / `foreign_keys=ON`
+- **轻量迁移**：启动时自动补列（如 `sessions.archived`），不用删库
+- **备份**：`python scripts/backup_db.py`（一致性快照，默认保留 7 份；`--restore` 恢复）
+
 ## ❓ 常见问题
 
 **Q：豆包/思考类模型很慢，老是超时？**

@@ -75,8 +75,8 @@ def test_writable_dir_check(tmp_path=None):
         target = os.path.join(d, "data", "uploads")
         assert check_writable([target]) == []
         assert os.path.isdir(target)
-        # 探针文件不能留下
-        assert not os.path.exists(os.path.join(target, ".write_probe"))
+        # 探针文件不能留下（并发下也不能互相踩）
+        assert not [f for f in os.listdir(target) if f.startswith(".write_probe")]
 
 
 if __name__ == "__main__":
