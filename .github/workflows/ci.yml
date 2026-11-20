@@ -9,8 +9,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      # 测试完全离线：不调用任何模型。给一份假注册表，让分层/价格类用例有东西可查
-      MODEL_REGISTRY: '{"dummy":{"base_url":"https://example.invalid/v1","api_key":"test-key","vendor":"t","label":"Dummy","model":"dummy-1"}}'
+      # 测试完全离线：不调用任何模型。这里的假注册表刻意用和真实 .env 相同的 key，
+      # 否则「分层引用的模型必须在注册表里」这类用例会误报（CI 没有 .env）
+      MODEL_REGISTRY: '{"glm-4-flash":{"base_url":"https://example.invalid/v1","api_key":"test-key","vendor":"智谱","label":"GLM-4-Flash"},"glm-4.6":{"base_url":"https://example.invalid/v1","api_key":"test-key","vendor":"智谱","label":"GLM-4.6","model":"glm-4.6"},"kimi-k2.7-code":{"base_url":"https://example.invalid/v1","api_key":"test-key","vendor":"月之暗面","label":"Kimi K2.7 Code","model":"kimi-k2.7-code"},"deepseek-v4-pro":{"base_url":"https://example.invalid/v1","api_key":"test-key","vendor":"深度求索","label":"DeepSeek V4 Pro","model":"deepseek-v4-pro"},"qwen4-max":{"base_url":"https://example.invalid/v1","api_key":"test-key","vendor":"阿里","label":"Qwen4 Max","model":"qwen4-max"}}'
       OPENAI_API_KEY: dummy
       OPENAI_BASE_URL: https://example.invalid/v1
       API_KEY: test-key
