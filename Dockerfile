@@ -2,6 +2,9 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# 国内默认用清华源；CI（海外 runner）用 --build-arg 覆盖成 pypi.org
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_ENDPOINT=https://hf-mirror.com \
@@ -16,8 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 # 先装依赖，利用Docker缓存，改代码不用重新装包
 COPY requirements.txt .
-RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    && pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --upgrade pip -i "$PIP_INDEX_URL" --retries 5 --timeout 120 \
+    && pip install -r requirements.txt -i "$PIP_INDEX_URL" --retries 5 --timeout 120 \
+    && pip cache purge || true
 
 # 复制项目代码
 COPY . .

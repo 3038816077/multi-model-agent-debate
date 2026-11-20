@@ -36,11 +36,14 @@ jobs:
         run: ruff check app scripts tests
 
       - name: 单元测试
-        run: pytest tests -q
+        run: python -m pytest tests -q -x --tb=short
 
   docker-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: 构建镜像并验证依赖装得全
-        run: docker build -t multi-model-agent-debate:ci .
+        run: |
+          docker build \
+            --build-arg PIP_INDEX_URL=https://pypi.org/simple \
+            -t multi-model-agent-debate:ci .
