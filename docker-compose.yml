@@ -5,7 +5,8 @@ services:
     build: .
     container_name: multi-model-agent-debate
     ports:
-      - "8000:8000"
+      # 宿主机端口:容器端口。8000 被占用时，在 .env 里设 APP_PORT=8080 即可
+      - "${APP_PORT:-8000}:${SERVER_PORT:-8000}"
     env_file:
       - .env
     volumes:
