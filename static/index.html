@@ -597,9 +597,26 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
         let API_KEY = localStorage.getItem('api_key') || '';
 
         // 只有手动配了 key 才额外发头；正常情况下凭服务端下发的 Cookie 鉴权
+        // 服务端令牌：容器重启后内存里的旧令牌会失效，所以启动时主动换一个，
+        // 不依赖页面加载时的 Cookie（304 时服务端不会重新下发）
+        let AGENT_TOKEN = '';
+
+        async function ensureToken() {
+            if (AGENT_TOKEN) return AGENT_TOKEN;
+            try {
+                const res = await fetch('/session/token', { method: 'POST' });
+                const data = await res.json();
+                AGENT_TOKEN = (data && data.data && data.data.token) || '';
+            } catch (e) {
+                console.warn('获取令牌失败，退回 Cookie 鉴权', e);
+            }
+            return AGENT_TOKEN;
+        }
+
         function authHeaders(base) {
             const headers = Object.assign({}, base || {});
             if (API_KEY) headers['X-API-Key'] = API_KEY;
+            if (AGENT_TOKEN) headers['Authorization'] = 'Bearer ' + AGENT_TOKEN;
             return headers;
         }
         // 默认选中的单模型（可用 localStorage 覆盖）
@@ -1647,6 +1664,9 @@ body::after  { width: 520px; height: 520px; right: -150px; bottom: -170px; backg
                 await loadSessionList();
             } catch (e) { alert('恢复失败：' + (e.message || e)); }
         }
+
+        // 页面启动先把令牌拿到手，再拉列表
+        ensureToken().then(() => loadSessionList()).catch(() => loadSessionList());
 
         async function loadSessionList() {
             try {

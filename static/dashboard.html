@@ -101,9 +101,22 @@
     let API_KEY = localStorage.getItem("api_key") || "";
 
         // 只有手动配了 key 才额外发头；正常情况下凭服务端下发的 Cookie 鉴权
+        let AGENT_TOKEN = '';
+
+        async function ensureToken() {
+            if (AGENT_TOKEN) return AGENT_TOKEN;
+            try {
+                const res = await fetch('/session/token', { method: 'POST' });
+                const data = await res.json();
+                AGENT_TOKEN = (data && data.data && data.data.token) || '';
+            } catch (e) { /* 退回 Cookie */ }
+            return AGENT_TOKEN;
+        }
+
         function authHeaders(base) {
             const headers = Object.assign({}, base || {});
             if (API_KEY) headers['X-API-Key'] = API_KEY;
+            if (AGENT_TOKEN) headers['Authorization'] = 'Bearer ' + AGENT_TOKEN;
             return headers;
         }
     let days = 14;
