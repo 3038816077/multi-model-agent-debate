@@ -11,6 +11,11 @@ services:
       - .env
     volumes:
       # 将原来的单文件挂载改为目录挂载
+      # 代码目录挂载：改代码后只需 up -d，不用每次重建镜像
+      # （镜像里已有依赖；生产环境建议去掉这两行，用 --build 固化版本）
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./run.py:/app/run.py
       - ./data:/app/data  
       - ./knowledge:/app/knowledge
       - ./static:/app/static
