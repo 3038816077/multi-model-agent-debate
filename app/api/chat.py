@@ -1,8 +1,8 @@
 import copy, uuid, re, time
 import asyncio
 import json
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -26,6 +26,21 @@ from app.db.database import SessionLocal
 from app.db.crud import (get_messages, save_message, get_or_create_session,
                          update_long_term_memory, get_user_memory, update_user_memory)
 from app.middleware.auth import limiter, verify_api_key
+from app.core.quota import QUOTA, client_ip, is_owner, quota_enabled
+
+
+async def enforce_daily_quota(request: Request, response: Response):
+    """公开演示时的每日调用上限；管理员 key 不计数。"""
+    if not quota_enabled() or is_owner(request):
+        return
+    allowed, remaining, limit = QUOTA.check_and_consume(client_ip(request))
+    response.headers["X-Quota-Remaining"] = str(remaining)
+    response.headers["X-Quota-Limit"] = str(limit)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="今日演示额度已用完（每 IP %d 次/天）。需要继续使用请自行部署。" % limit,
+        )
 from app.api.upload import load_document, resolve_session_doc, resolve_session_docs
 
 # 注入到提示词里的文档正文上限（字），超出的部分截断并告知模型
@@ -503,7 +518,8 @@ async def _stream_answer(thought_process: str, final_answer: str, trace_id: str,
 # ==================== 1. 单模型同步对话 ====================
 @router.post("/chat", summary="对话接口")
 @limiter.limit("30/minute")
-def chat(request: Request, request_body: ChatRequest, db: Session = Depends(get_db), auth: bool = Depends(verify_api_key)):
+def chat(request: Request, response: Response, request_body: ChatRequest, db: Session = Depends(get_db), auth: bool = Depends(verify_api_key),
+                 _quota=Depends(enforce_daily_quota)):
     current_trace_id = set_trace()
     if request_body.user_model_name or request_body.user_api_key:
         logger.info(f"[模型切换] 目标模型: {request_body.user_model_name}, 自定义Key: {bool(request_body.user_api_key)}")
@@ -681,7 +697,8 @@ def _schedule_group_memory(session_id: str, query: str, answers: dict):
 # ==================== 2. 单模型流式对话 ====================
 @router.post("/chat/stream", summary="流式对话接口")
 @limiter.limit("30/minute")
-async def chat_stream(request: Request, request_body: ChatRequest, db: Session = Depends(get_db), auth: bool = Depends(verify_api_key)):
+async def chat_stream(request: Request, response: Response, request_body: ChatRequest, db: Session = Depends(get_db), auth: bool = Depends(verify_api_key),
+                    _quota=Depends(enforce_daily_quota)):
     current_trace_id = set_trace()
     if request_body.user_model_name or request_body.user_api_key:
         logger.info(f"[模型切换] 目标模型: {request_body.user_model_name}, 自定义Key: {bool(request_body.user_api_key)}")
@@ -1239,7 +1256,9 @@ async def analyze_divergence(query: str, answers: dict, trace_id: str = "",
 # ==================== 3. 多模型并行流式接口 ====================
 @router.post("/chat/group_stream", summary="多模型并行流式接口")
 @limiter.limit("10/minute")
-async def chat_group_stream(request: Request, request_body: GroupChatRequest, db: Session = Depends(get_db)):
+async def chat_group_stream(request: Request, response: Response, request_body: GroupChatRequest, db: Session = Depends(get_db),
+                              auth: bool = Depends(verify_api_key),
+                              _quota=Depends(enforce_daily_quota)):
     current_trace_id = set_trace()
     # 日志里同时给出 label 和 key：key 是注册表标识，label 才是人看的模型名
     _reg = get_model_registry()
