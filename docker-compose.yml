@@ -29,4 +29,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+    # SSE 是长连接：不给超时的话，停止容器会一直等前端断开
+    stop_grace_period: 10s
     restart: unless-stopped
